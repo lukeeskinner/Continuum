@@ -1,10 +1,13 @@
 "use client";
 
 // Shared application chrome: gradient sidebar nav + glass topbar.
-// Wraps every route so navigation state + cluster context persist.
+// Wraps every dashboard route so navigation + real cluster context persist.
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CLUSTER, TEAMMATES, ACCENTS } from "@/lib/mock";
+import { useCluster } from "@/components/ClusterProvider";
+import { initialsFor } from "@/lib/colors";
+import InviteModal from "@/components/InviteModal";
 import {
   IconHome,
   IconGraph,
@@ -12,7 +15,6 @@ import {
   IconShield,
   IconSpark,
   IconPlus,
-  IconLink,
 } from "./icons";
 
 const NAV = [
@@ -29,7 +31,21 @@ function isActive(pathname: string, href: string, end?: boolean) {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const online = TEAMMATES.filter((t) => t.online);
+  const {
+    clusters,
+    activeCluster,
+    activeClusterId,
+    setActiveClusterId,
+    role,
+    members,
+    currentUser,
+    signOut,
+    colorFor,
+  } = useCluster();
+  const [inviteOpen, setInviteOpen] = useState(false);
+
+  const currentName = currentUser.full_name || currentUser.email;
+  const stack = members.slice(0, 5);
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -44,17 +60,33 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </span>
         </Link>
 
-        {/* Cluster pill */}
+        {/* Cluster pill / switcher */}
         <div className="card mb-2 flex items-center gap-2.5 px-3 py-2.5">
           <span
             className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-xs font-bold text-white"
-            style={{ background: `linear-gradient(135deg, ${ACCENTS.lavender}, ${ACCENTS.sky})` }}
+            style={{ background: `linear-gradient(135deg, ${colorFor(activeClusterId)}, #59c2ff)` }}
           >
-            CC
+            {initialsFor(activeCluster.name)}
           </span>
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-semibold leading-tight">{CLUSTER.name}</p>
-            <p className="text-[11px] text-ink-faint">{CLUSTER.plan} · {CLUSTER.members} members</p>
+          <div className="min-w-0 flex-1">
+            {clusters.length > 1 ? (
+              <select
+                value={activeClusterId}
+                onChange={(e) => setActiveClusterId(e.target.value)}
+                className="w-full truncate bg-transparent text-[13px] font-semibold leading-tight outline-none"
+              >
+                {clusters.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <p className="truncate text-[13px] font-semibold leading-tight">{activeCluster.name}</p>
+            )}
+            <p className="text-[11px] capitalize text-ink-faint">
+              {role} · {members.length} {members.length === 1 ? "member" : "members"}
+            </p>
           </div>
         </div>
 
@@ -87,27 +119,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="mt-auto flex flex-col gap-3">
-          <Link
-            href="/manage"
-            className="card card-hover flex items-center gap-2 px-3 py-2.5 text-[13px] font-semibold text-ink-soft"
-          >
-            <IconLink width={16} height={16} className="text-lavender" />
-            <span className="font-mono text-xs">{CLUSTER.inviteCode}</span>
-            <span className="ml-auto text-[11px] font-medium text-ink-faint">invite</span>
-          </Link>
+          {role === "admin" && (
+            <button
+              onClick={() => setInviteOpen(true)}
+              className="card card-hover flex items-center gap-2 px-3 py-2.5 text-[13px] font-semibold text-ink-soft"
+            >
+              <IconPlus width={16} height={16} className="text-lavender" />
+              Invite a teammate
+            </button>
+          )}
           <div className="flex items-center gap-2.5 px-1">
             <span
               className="grid h-9 w-9 place-items-center rounded-full text-xs font-bold text-white"
-              style={{ background: ACCENTS.lavender }}
+              style={{ background: colorFor(currentUser.id) }}
             >
-              LS
+              {initialsFor(currentName)}
             </span>
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-semibold leading-tight">Luke Skinner</p>
-              <p className="flex items-center gap-1.5 text-[11px] text-ink-faint">
-                <span className="dot-online !h-2 !w-2" /> Manager
-              </p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-semibold leading-tight">{currentName}</p>
+              <p className="text-[11px] capitalize text-ink-faint">{role}</p>
             </div>
+            <button
+              onClick={signOut}
+              className="rounded-lg px-2 py-1 text-[11px] font-semibold text-ink-faint transition hover:bg-white/70 hover:text-ink"
+            >
+              Sign out
+            </button>
           </div>
         </div>
       </aside>
@@ -126,28 +163,36 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="flex items-center gap-2">
             <span className="dot-online" />
             <span className="text-sm font-medium text-ink-soft">
-              Mesh live · <span className="text-ink">{online.length} online</span>
+              Mesh live · <span className="text-ink">{members.length} teammates</span>
             </span>
           </div>
 
           <div className="ml-auto flex items-center gap-3">
-            {/* online avatar stack */}
+            {/* member avatar stack */}
             <div className="hidden items-center sm:flex">
-              {online.slice(0, 5).map((t, i) => (
-                <span
-                  key={t.id}
-                  title={t.name}
-                  className="grid h-8 w-8 place-items-center rounded-full text-[11px] font-bold text-white ring-2 ring-white"
-                  style={{ background: ACCENTS[t.accent], marginLeft: i === 0 ? 0 : -8 }}
-                >
-                  {t.initials}
-                </span>
-              ))}
+              {stack.map((m, i) => {
+                const name = m.full_name || m.email;
+                return (
+                  <span
+                    key={m.id}
+                    title={name}
+                    className="grid h-8 w-8 place-items-center rounded-full text-[11px] font-bold text-white ring-2 ring-white"
+                    style={{ background: colorFor(m.id), marginLeft: i === 0 ? 0 : -8 }}
+                  >
+                    {initialsFor(name)}
+                  </span>
+                );
+              })}
             </div>
-            <button className="btn-grad flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold">
-              <IconPlus width={16} height={16} />
-              <span className="hidden sm:inline">Invite</span>
-            </button>
+            {role === "admin" && (
+              <button
+                onClick={() => setInviteOpen(true)}
+                className="btn-grad flex items-center gap-1.5 rounded-xl px-3.5 py-2 text-sm font-semibold"
+              >
+                <IconPlus width={16} height={16} />
+                <span className="hidden sm:inline">Invite</span>
+              </button>
+            )}
           </div>
         </header>
 
@@ -172,6 +217,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           );
         })}
       </nav>
+
+      {inviteOpen && (
+        <InviteModal clusterId={activeClusterId} onClose={() => setInviteOpen(false)} />
+      )}
     </div>
   );
 }

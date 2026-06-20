@@ -13,6 +13,13 @@ export interface MemberProfile {
   id: string;
   full_name: string | null;
   email: string;
+  role: "admin" | "member";
+}
+
+export interface CurrentUser {
+  id: string;
+  full_name: string | null;
+  email: string;
 }
 
 // Clusters the signed-in user belongs to, with their role in each.
@@ -31,24 +38,68 @@ export async function getMyClusters(): Promise<ClusterMembership[]> {
   });
 }
 
-// Profiles of everyone sharing the given cluster (for teammate labels/colors).
+// Profiles of everyone sharing the given cluster (for teammate labels/colors),
+// each annotated with their role in the cluster.
 export async function getClusterMembers(clusterId: string): Promise<MemberProfile[]> {
   const supabase = createBrowserClient();
   const { data: members, error: memberErr } = await supabase
     .from("cluster_members")
-    .select("user_id")
+    .select("user_id, role")
     .eq("cluster_id", clusterId);
   if (memberErr) throw memberErr;
 
-  const ids = (members ?? []).map((m) => m.user_id);
-  if (ids.length === 0) return [];
+  const rows = members ?? [];
+  if (rows.length === 0) return [];
+  const roleById = new Map(rows.map((m) => [m.user_id, m.role as "admin" | "member"]));
 
   const { data: profiles, error: profileErr } = await supabase
     .from("profiles")
     .select("id, full_name, email")
-    .in("id", ids);
+    .in("id", [...roleById.keys()]);
   if (profileErr) throw profileErr;
-  return (profiles ?? []) as MemberProfile[];
+
+  return (profiles ?? []).map((p) => ({
+    id: p.id as string,
+    full_name: (p.full_name as string | null) ?? null,
+    email: p.email as string,
+    role: roleById.get(p.id as string) ?? "member",
+  }));
+}
+
+// The signed-in user's profile (id + name + email).
+export async function getCurrentUser(): Promise<CurrentUser | null> {
+  const supabase = createBrowserClient();
+  const { data: auth } = await supabase.auth.getUser();
+  const user = auth.user;
+  if (!user) return null;
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name, email")
+    .eq("id", user.id)
+    .maybeSingle();
+  return {
+    id: user.id,
+    full_name: (profile?.full_name as string | null) ?? null,
+    email: (profile?.email as string | undefined) ?? user.email ?? "",
+  };
+}
+
+// Lightweight node/edge counts for the active cluster (overview stats).
+export async function getGraphCounts(
+  clusterId: string,
+): Promise<{ nodes: number; edges: number }> {
+  const supabase = createBrowserClient();
+  const [nodesRes, edgesRes] = await Promise.all([
+    supabase
+      .from("semantic_nodes")
+      .select("id", { count: "exact", head: true })
+      .eq("cluster_id", clusterId),
+    supabase
+      .from("semantic_edges")
+      .select("id", { count: "exact", head: true })
+      .eq("cluster_id", clusterId),
+  ]);
+  return { nodes: nodesRes.count ?? 0, edges: edgesRes.count ?? 0 };
 }
 
 // Existing nodes + edges for a cluster (initial graph load before realtime).

@@ -53,7 +53,14 @@ export type ClusterEvent =
 export interface QueryResult {
   answer: string;
   subgraph: {
-    nodes: Array<{ id: string; label?: string; concept?: string; teammate?: string }>;
+    nodes: Array<{
+      id: string;
+      label?: string;
+      concept?: string;
+      app?: string;
+      topic?: string;
+      teammate?: string;
+    }>;
     edges: Array<{ source?: string; target?: string; source_node_id?: string; target_node_id?: string; type: EdgeType }>;
   };
 }

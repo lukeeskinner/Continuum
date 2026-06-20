@@ -1,60 +1,108 @@
 "use client";
 
-// Ask-the-mesh query interface. Text input + push-to-talk voice capture
-// (mocked) -> citation-aware synthesized answer with teammate attribution
-// cards and a contributing-subgraph preview.
-//
-// Wiring later: voice -> `voice-transcribe`, query -> `query-synthesize`.
+// Ask-the-mesh query interface. Text input + push-to-talk voice capture route
+// to the real Edge Functions: voice -> `voice-transcribe`, query ->
+// `query-synthesize`. Renders the synthesized answer with teammate attribution
+// cards, a citation list, and the contributing subgraph.
 import { useMemo, useRef, useState } from "react";
 import GraphCanvas from "@/components/GraphCanvas";
-import {
-  MOCK_QUERY,
-  SUGGESTED_QUERIES,
-  TEAMMATES,
-  ACCENTS,
-  EDGE_META,
-  teammateById,
-  buildGraphNodes,
-  MOCK_EDGES,
-  type MockQueryResult,
-} from "@/lib/mock";
-import type { GraphLink, GraphNode } from "@/types/graph";
+import { useCluster } from "@/components/ClusterProvider";
+import { callFunction, callFunctionRaw } from "@/lib/functions";
+import { colorForKey, initialsFor } from "@/lib/colors";
+import { EDGE_META } from "@/lib/mock";
+import type { GraphLink, GraphNode, QueryResult } from "@/types/graph";
 import { IconChat, IconMic, IconSend, IconBolt, IconSpark } from "@/components/icons";
 
-type Status = "idle" | "thinking" | "answered";
+type Status = "idle" | "thinking" | "answered" | "error";
+
+const SUGGESTED_QUERIES = [
+  "What is the team working on right now?",
+  "Has anyone run into this error before?",
+  "Who knows the most about our auth setup?",
+  "Summarize recent work across the team.",
+];
+
+interface TranscribeResult {
+  transcript: string;
+}
 
 export default function QueryPage() {
+  const { activeClusterId } = useCluster();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [recording, setRecording] = useState(false);
-  const [result, setResult] = useState<MockQueryResult | null>(null);
-  const recTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [result, setResult] = useState<QueryResult | null>(null);
+  const [error, setError] = useState("");
 
-  function ask(q?: string) {
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]);
+
+  async function ask(q?: string) {
     const text = (q ?? query).trim();
-    if (!text) return;
+    if (!text || !activeClusterId) return;
     setQuery(text);
     setStatus("thinking");
     setResult(null);
-    setTimeout(() => {
-      setResult(MOCK_QUERY);
+    setError("");
+    try {
+      const data = await callFunction<QueryResult>("query-synthesize", {
+        query: text,
+        cluster_id: activeClusterId,
+      });
+      setResult(data);
       setStatus("answered");
-    }, 1300);
+    } catch (err) {
+      setError(String(err instanceof Error ? err.message : err));
+      setStatus("error");
+    }
+  }
+
+  async function startRecording() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        stream.getTracks().forEach((t) => t.stop());
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+        setStatus("thinking");
+        try {
+          const { transcript } = await callFunctionRaw<TranscribeResult>(
+            "voice-transcribe",
+            blob,
+            recorder.mimeType || "audio/webm",
+          );
+          if (transcript) {
+            await ask(transcript);
+          } else {
+            setError("Could not transcribe audio.");
+            setStatus("error");
+          }
+        } catch (err) {
+          setError(`Transcription error: ${String(err instanceof Error ? err.message : err)}`);
+          setStatus("error");
+        }
+      };
+      recorder.start();
+      recorderRef.current = recorder;
+      setRecording(true);
+    } catch (err) {
+      setError(`Microphone error: ${String(err instanceof Error ? err.message : err)}`);
+      setStatus("error");
+    }
+  }
+
+  function stopRecording() {
+    recorderRef.current?.stop();
+    setRecording(false);
   }
 
   function toggleMic() {
-    if (recording) {
-      if (recTimer.current) clearTimeout(recTimer.current);
-      setRecording(false);
-      return;
-    }
-    setRecording(true);
-    // Simulate Deepgram push-to-talk: capture, then transcribe + ask.
-    recTimer.current = setTimeout(() => {
-      setRecording(false);
-      const sample = SUGGESTED_QUERIES[0];
-      ask(sample);
-    }, 1900);
+    if (recording) stopRecording();
+    else startRecording();
   }
 
   return (
@@ -115,7 +163,7 @@ export default function QueryPage() {
       {recording && (
         <p className="fade-up mt-2 flex items-center gap-2 px-1 text-xs font-medium text-ink-soft">
           <span className="dot-online !bg-[var(--edge-contradicts)] after:!bg-[var(--edge-contradicts)]" />
-          Listening… release to transcribe with Deepgram
+          Listening… tap the mic again to transcribe and ask
         </p>
       )}
 
@@ -144,7 +192,7 @@ export default function QueryPage() {
         <div className="card fade-up mt-5 p-5">
           <p className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink-soft">
             <IconBolt width={16} height={16} className="text-lavender" />
-            Synthesizing across {TEAMMATES.length} teammates&apos; graphs…
+            Synthesizing across the team&apos;s graph…
           </p>
           <div className="flex flex-col gap-2.5">
             <div className="shimmer h-3.5 w-full rounded-full" />
@@ -154,137 +202,150 @@ export default function QueryPage() {
         </div>
       )}
 
+      {/* Error */}
+      {status === "error" && (
+        <div className="card fade-up mt-5 border border-[var(--edge-contradicts)]/40 p-5">
+          <p className="text-sm font-semibold text-ink">Something went wrong</p>
+          <p className="mt-1 text-xs text-ink-soft">{error}</p>
+        </div>
+      )}
+
       {/* Answer */}
       {status === "answered" && result && <Answer result={result} />}
     </div>
   );
 }
 
-function Answer({ result }: { result: MockQueryResult }) {
-  // Contributing subgraph: cited nodes + their direct neighbors (capped).
-  const { subNodes, subLinks, highlight } = useMemo(() => {
-    const all = buildGraphNodes();
-    const citeIds = new Set(result.citations.map((c) => c.nodeId));
-    const keep = new Set(citeIds);
-    for (const e of MOCK_EDGES) {
-      if (citeIds.has(e.source)) keep.add(e.target);
-      if (citeIds.has(e.target)) keep.add(e.source);
-      if (keep.size >= 15) break;
-    }
-    const subNodes: GraphNode[] = all.filter((n) => keep.has(n.id));
-    const subLinks: GraphLink[] = MOCK_EDGES.filter(
-      (e) => keep.has(e.source) && keep.has(e.target),
-    ).map((e) => ({ source: e.source, target: e.target, type: e.type }));
-    return { subNodes, subLinks, highlight: citeIds };
+function Answer({ result }: { result: QueryResult }) {
+  const { subNodes, subLinks, highlight, citations, contributors } = useMemo(() => {
+    const subNodes: GraphNode[] = result.subgraph.nodes.map((n) => ({
+      id: n.id,
+      label: n.label || n.concept || n.id,
+      app: n.app || "",
+      teammate: n.teammate || "",
+      colorKey: n.teammate || n.id,
+    }));
+    const subLinks: GraphLink[] = result.subgraph.edges
+      .map((e) => ({
+        source: e.source ?? e.source_node_id ?? "",
+        target: e.target ?? e.target_node_id ?? "",
+        type: e.type,
+      }))
+      .filter((l) => l.source && l.target);
+    const highlight = new Set(subNodes.map((n) => n.id));
+
+    const citations = result.subgraph.nodes.map((n) => ({
+      id: n.id,
+      concept: n.label || n.concept || "Concept",
+      teammate: n.teammate || "Unknown",
+      app: n.app || "",
+      topic: n.topic || "",
+    }));
+
+    const counts = new Map<string, number>();
+    for (const c of citations) counts.set(c.teammate, (counts.get(c.teammate) ?? 0) + 1);
+    const contributors = [...counts.entries()].map(([name, count]) => ({ name, count }));
+
+    return { subNodes, subLinks, highlight, citations, contributors };
   }, [result]);
 
-  const contributorStats = result.contributors.map((id) => ({
-    teammate: teammateById(id)!,
-    count: result.citations.filter((c) => c.user === id).length,
-  }));
+  const hasNodes = subNodes.length > 0;
 
   return (
     <div className="fade-up mt-5 flex flex-col gap-5">
       {/* Attribution cards */}
-      <div className="grid gap-3 sm:grid-cols-3">
-        {contributorStats.map(({ teammate: t, count }) => (
-          <div key={t.id} className="card card-hover flex items-center gap-3 p-3">
-            <span
-              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-xs font-bold text-white"
-              style={{ background: ACCENTS[t.accent] }}
-            >
-              {t.initials}
-            </span>
-            <div className="min-w-0">
-              <p className="truncate text-sm font-bold">{t.name}</p>
-              <p className="text-[11px] text-ink-faint">
-                {count} contributing {count === 1 ? "concept" : "concepts"}
-              </p>
+      {contributors.length > 0 && (
+        <div className="grid gap-3 sm:grid-cols-3">
+          {contributors.map(({ name, count }) => (
+            <div key={name} className="card card-hover flex items-center gap-3 p-3">
+              <span
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-xs font-bold text-white"
+                style={{ background: colorForKey(name) }}
+              >
+                {initialsFor(name)}
+              </span>
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold">{name}</p>
+                <p className="text-[11px] text-ink-faint">
+                  {count} contributing {count === 1 ? "concept" : "concepts"}
+                </p>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
 
       {/* Synthesized answer */}
       <div className="card p-5 sm:p-6">
         <p className="mb-3 flex items-center gap-2 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
           <IconSpark width={14} height={14} className="text-lavender" /> Synthesized answer
         </p>
-        <p className="text-[15px] leading-7 text-ink">
-          {result.answer.map((seg, i) =>
-            seg.cite ? (
-              <mark key={i} className="cite">
-                {seg.text}
-                <sup className="ml-0.5 text-[10px] font-bold text-lavender">{seg.cite}</sup>
-              </mark>
-            ) : (
-              <span key={i}>{seg.text}</span>
-            ),
-          )}
-        </p>
+        <p className="whitespace-pre-wrap text-[15px] leading-7 text-ink">{result.answer}</p>
       </div>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        {/* Citations */}
-        <div className="card p-5">
-          <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
-            Citations
-          </p>
-          <div className="flex flex-col gap-2.5">
-            {result.citations.map((c) => {
-              const t = teammateById(c.user)!;
-              return (
+      {hasNodes && (
+        <div className="grid gap-5 lg:grid-cols-2">
+          {/* Citations */}
+          <div className="card p-5">
+            <p className="mb-3 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
+              Citations
+            </p>
+            <div className="flex flex-col gap-2.5">
+              {citations.map((c, i) => (
                 <div key={c.id} className="flex gap-3 rounded-xl border border-line p-3">
                   <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-lemon/30 text-xs font-bold text-ink">
-                    {c.id}
+                    {i + 1}
                   </span>
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <p className="truncate text-sm font-bold">{c.concept}</p>
                       <span
                         className="chip shrink-0 text-[10px] text-white"
-                        style={{ background: ACCENTS[t.accent] }}
+                        style={{ background: colorForKey(c.teammate) }}
                       >
-                        {t.name.split(" ")[0]}
+                        {c.teammate.split(" ")[0]}
                       </span>
                     </div>
-                    <p className="mt-0.5 text-xs text-ink-soft">{c.snippet}</p>
-                    <p className="mt-1 text-[11px] text-ink-faint">via {c.app}</p>
+                    {(c.app || c.topic) && (
+                      <p className="mt-0.5 text-xs text-ink-soft">
+                        {[c.app, c.topic].filter(Boolean).join(" · ")}
+                      </p>
+                    )}
                   </div>
                 </div>
-              );
-            })}
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* Contributing subgraph */}
-        <div className="card relative overflow-hidden p-5">
-          <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
-            Contributing subgraph
-          </p>
-          <p className="mb-2 text-xs text-ink-soft">
-            The {subNodes.length} nodes behind this answer.
-          </p>
-          <div
-            className="h-[260px] w-full overflow-hidden rounded-xl bg-surface-2/60"
-            style={{
-              backgroundImage:
-                "radial-gradient(circle at center, rgba(157,123,255,0.10) 1px, transparent 1px)",
-              backgroundSize: "22px 22px",
-            }}
-          >
-            <GraphCanvas nodes={subNodes} links={subLinks} highlightIds={highlight} />
-          </div>
-          <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
-            {(Object.keys(EDGE_META) as Array<keyof typeof EDGE_META>).map((k) => (
-              <span key={k} className="flex items-center gap-1.5 text-[11px] text-ink-soft">
-                <span className="h-0.5 w-4 rounded-full" style={{ background: EDGE_META[k].color }} />
-                {EDGE_META[k].label}
-              </span>
-            ))}
+          {/* Contributing subgraph */}
+          <div className="card relative overflow-hidden p-5">
+            <p className="mb-1 text-[11px] font-bold uppercase tracking-wider text-ink-faint">
+              Contributing subgraph
+            </p>
+            <p className="mb-2 text-xs text-ink-soft">
+              The {subNodes.length} nodes behind this answer.
+            </p>
+            <div
+              className="h-[260px] w-full overflow-hidden rounded-xl bg-surface-2/60"
+              style={{
+                backgroundImage:
+                  "radial-gradient(circle at center, rgba(157,123,255,0.10) 1px, transparent 1px)",
+                backgroundSize: "22px 22px",
+              }}
+            >
+              <GraphCanvas nodes={subNodes} links={subLinks} highlightIds={highlight} />
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
+              {(Object.keys(EDGE_META) as Array<keyof typeof EDGE_META>).map((k) => (
+                <span key={k} className="flex items-center gap-1.5 text-[11px] text-ink-soft">
+                  <span className="h-0.5 w-4 rounded-full" style={{ background: EDGE_META[k].color }} />
+                  {EDGE_META[k].label}
+                </span>
+              ))}
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
