@@ -29,12 +29,13 @@ export interface GraphNode {
   id: string;
   label: string;
   app: string;
-  topic: string;
-  errorType: string | null;
   teammate: string;
-  createdAt: string | null;
   // Stable color key (per teammate) assigned client-side.
   colorKey: string;
+  // Optional metadata, populated from real semantic_nodes (absent for mock).
+  topic?: string;
+  errorType?: string | null;
+  createdAt?: string | null;
 }
 
 export interface GraphLink {
