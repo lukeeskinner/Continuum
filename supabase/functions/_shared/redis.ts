@@ -69,6 +69,40 @@ export async function checkRateLimit(
   return count <= limit;
 }
 
+// KNN vector search over the cluster's nodes. Returns node ids ordered by
+// similarity. Throws if Redis Stack / RediSearch is unavailable so callers can
+// fall back to the pgvector `match_nodes` RPC.
+export async function knnSearch(
+  redis: Redis,
+  clusterId: string,
+  queryEmbedding: number[],
+  k = 20,
+): Promise<string[]> {
+  const buf = toFloat32Buffer(queryEmbedding);
+  // Escape RediSearch TAG special chars (UUIDs contain hyphens).
+  const tag = clusterId.replace(/[-]/g, "\\$&");
+  const reply = (await redis.sendCommand("FT.SEARCH", [
+    "idx:nodes",
+    `@cluster_id:{${tag}}=>[KNN ${k} @embedding $query_vector AS score]`,
+    "PARAMS", "2", "query_vector", buf,
+    "SORTBY", "score",
+    "RETURN", "1", "id",
+    "DIALECT", "2",
+  ])) as unknown as unknown[];
+
+  // RESP2 shape: [count, key, [field, value, ...], key, [field, value, ...], ...]
+  const ids: string[] = [];
+  for (let i = 1; i + 1 < reply.length; i += 2) {
+    const fields = reply[i + 1];
+    if (Array.isArray(fields)) {
+      const idx = fields.indexOf("id");
+      const val = idx >= 0 ? fields[idx + 1] : undefined;
+      if (typeof val === "string") ids.push(val);
+    }
+  }
+  return ids;
+}
+
 // Idempotent VSS index creation. Safe to call on cold start.
 export async function ensureVectorIndex(redis: Redis): Promise<void> {
   try {

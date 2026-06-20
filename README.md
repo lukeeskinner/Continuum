@@ -49,8 +49,8 @@ See the full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 - Next.js is **16.2.9** here (the plan said 14); App Router + Route Handlers are
   used accordingly.
-- Claude model aliases: `claude-haiku-4-5` / `claude-sonnet-4-5` (the plan's
-  "Sonnet 4.6" is not a released model).
+- Claude models: `claude-haiku-4-5` for all high-frequency tasks (classification,
+  connection detection), `claude-sonnet-4-6` for user-facing query synthesis.
 - Redis VSS (`FT.CREATE`/`FT.SEARCH`) requires **Redis Stack / Redis Cloud**.
   Upstash does not support the search module, so a pgvector fallback
   (`match_nodes` / `find_connection_candidates` RPCs) is provided.

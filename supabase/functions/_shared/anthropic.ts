@@ -1,15 +1,14 @@
 // Claude helpers with prompt caching enabled to stay within the $25 budget.
 //
-// Model note: the architecture doc references "Claude Sonnet 4.6", which is not
-// a released model. We use the latest available aliases here; update if newer
-// snapshots ship.
+// Model note: Haiku for all high-frequency tasks (classification, connection
+// detection), Sonnet only for user-facing query synthesis.
 import { ENV } from "./env.ts";
 
 export const MODELS = {
   // Fast/cheap relationship classification.
   HAIKU: "claude-haiku-4-5",
   // Citation-aware synthesis.
-  SONNET: "claude-sonnet-4-5",
+  SONNET: "claude-sonnet-4-6",
 } as const;
 
 interface ClaudeMessage {

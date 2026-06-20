@@ -30,3 +30,6 @@ toggle.addEventListener("click", async () => {
   toggle.textContent = paused ? "Resume" : "Pause";
   dot.style.opacity = paused ? "0.3" : "1";
 });
+
+const signout = document.getElementById("signout");
+signout.addEventListener("click", () => window.continuum.signOut());

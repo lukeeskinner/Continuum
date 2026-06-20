@@ -8,6 +8,7 @@ import { ENV } from "../_shared/env.ts";
 import { adminClient } from "../_shared/supabase.ts";
 import { claude, MODELS } from "../_shared/anthropic.ts";
 import { publishEvent, redisClient } from "../_shared/redis.ts";
+import { recordSpan } from "../_shared/trace.ts";
 
 const SIMILARITY_THRESHOLD = 0.82;
 
@@ -34,6 +35,7 @@ Deno.serve(async (req) => {
     return jsonResponse({ error: "unauthorized" }, 401);
   }
 
+  const startedAt = Date.now();
   const supabase = adminClient();
 
   // Iterate clusters; for each, pull cross-person candidate pairs via pgvector.
@@ -43,6 +45,7 @@ Deno.serve(async (req) => {
   if (clusterErr) return jsonResponse({ error: clusterErr.message }, 500);
 
   let edgesCreated = 0;
+  let candidatesEvaluated = 0;
   const redis = await redisClient().catch(() => null);
 
   for (const { id: clusterId } of clusters ?? []) {
@@ -56,6 +59,7 @@ Deno.serve(async (req) => {
     }
 
     for (const c of (candidates ?? []) as Candidate[]) {
+      candidatesEvaluated++;
       let type = "RELATED_TO";
       let explanation = "Semantically similar work across teammates.";
       try {
@@ -104,6 +108,13 @@ Deno.serve(async (req) => {
       }
     }
   }
+
+  recordSpan("connection-detect", startedAt, {
+    "continuum.clusters_scanned": (clusters ?? []).length,
+    "continuum.candidates_evaluated": candidatesEvaluated,
+    "continuum.edges_created": edgesCreated,
+    "llm.model": MODELS.HAIKU,
+  });
 
   return jsonResponse({ status: "completed", edges_created: edgesCreated });
 });

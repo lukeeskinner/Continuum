@@ -29,7 +29,10 @@ export interface GraphNode {
   id: string;
   label: string;
   app: string;
+  topic: string;
+  errorType: string | null;
   teammate: string;
+  createdAt: string | null;
   // Stable color key (per teammate) assigned client-side.
   colorKey: string;
 }
