@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Continuum",
-  description: "Real-time, cross-person organizational knowledge graph.",
+  title: "Continuum — the mesh builds itself",
+  description:
+    "Real-time, cross-person organizational knowledge graph. Just work, and the mesh builds itself.",
 };
 
 export default function RootLayout({
@@ -27,7 +28,12 @@ export default function RootLayout({
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full">
+        <div className="aurora" aria-hidden>
+          <div className="aurora-blob" />
+        </div>
+        {children}
+      </body>
     </html>
   );
 }
