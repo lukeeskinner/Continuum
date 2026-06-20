@@ -1,0 +1,8 @@
+# Local vision sidecar (moondream2). Pinned for reproducibility.
+# Install into a venv: python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+transformers==4.44.2
+torch==2.4.1
+pillow==10.4.0
+einops==0.8.0
+# moondream2's remote code may also require:
+torchvision==0.19.1

@@ -1,0 +1,14 @@
+{
+  "name": "continuum-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Continuum ambient desktop agent — captures screen context and syncs to the user's Letta agent.",
+  "main": "electron/main.js",
+  "scripts": {
+    "start": "electron .",
+    "sidecar:setup": "python3 -m venv sidecar/.venv && sidecar/.venv/bin/pip install -r sidecar/requirements.txt"
+  },
+  "devDependencies": {
+    "electron": "32.2.7"
+  }
+}
