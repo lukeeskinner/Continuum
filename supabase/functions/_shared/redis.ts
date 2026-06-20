@@ -6,7 +6,7 @@
 // the pgvector fallback (`match_nodes` RPC) instead of the KNN path here.
 import { connect, type Redis } from "https://deno.land/x/redis@v0.32.3/mod.ts";
 import { ENV } from "./env.ts";
-import { toFloat32Buffer, EMBEDDING_DIM } from "./embeddings.ts";
+import { EMBEDDING_DIM, toFloat32Buffer } from "./embeddings.ts";
 
 let client: Redis | null = null;
 
@@ -37,11 +37,16 @@ export async function cacheNode(
   const buf = toFloat32Buffer(embedding);
   await redis.sendCommand("HSET", [
     `node:${node.id}`,
-    "id", node.id,
-    "user_id", node.userId,
-    "cluster_id", node.clusterId,
-    "descriptor", node.descriptor,
-    "embedding", buf,
+    "id",
+    node.id,
+    "user_id",
+    node.userId,
+    "cluster_id",
+    node.clusterId,
+    "descriptor",
+    node.descriptor,
+    "embedding",
+    buf,
   ]);
 }
 
@@ -84,13 +89,27 @@ export async function knnSearch(
   const reply = (await redis.sendCommand("FT.SEARCH", [
     "idx:nodes",
     `@cluster_id:{${tag}}=>[KNN ${k} @embedding $query_vector AS score]`,
-    "PARAMS", "2", "query_vector", buf,
-    "SORTBY", "score",
-    "RETURN", "1", "id",
-    "DIALECT", "2",
+    "PARAMS",
+    "2",
+    "query_vector",
+    buf,
+    "SORTBY",
+    "score",
+    "RETURN",
+    "1",
+    "id",
+    "DIALECT",
+    "2",
   ])) as unknown as unknown[];
 
-  // RESP2 shape: [count, key, [field, value, ...], key, [field, value, ...], ...]
+  return parseKnnReply(reply);
+}
+
+// Extract node ids from a RESP2 FT.SEARCH reply.
+// Shape: [count, key, [field, value, ...], key, [field, value, ...], ...].
+// Exported for unit testing the (untyped, error-prone) parse separately.
+export function parseKnnReply(reply: unknown): string[] {
+  if (!Array.isArray(reply)) return [];
   const ids: string[] = [];
   for (let i = 1; i + 1 < reply.length; i += 2) {
     const fields = reply[i + 1];
@@ -107,13 +126,25 @@ export async function knnSearch(
 export async function ensureVectorIndex(redis: Redis): Promise<void> {
   try {
     await redis.sendCommand("FT.CREATE", [
-      "idx:nodes", "ON", "HASH", "PREFIX", "1", "node:",
+      "idx:nodes",
+      "ON",
+      "HASH",
+      "PREFIX",
+      "1",
+      "node:",
       "SCHEMA",
-      "cluster_id", "TAG",
-      "embedding", "VECTOR", "FLAT", "6",
-      "TYPE", "FLOAT32",
-      "DIM", String(EMBEDDING_DIM),
-      "DISTANCE_METRIC", "COSINE",
+      "cluster_id",
+      "TAG",
+      "embedding",
+      "VECTOR",
+      "FLAT",
+      "6",
+      "TYPE",
+      "FLOAT32",
+      "DIM",
+      String(EMBEDDING_DIM),
+      "DISTANCE_METRIC",
+      "COSINE",
     ]);
   } catch (err) {
     // "Index already exists" is expected on warm starts.

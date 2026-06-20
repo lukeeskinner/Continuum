@@ -6,6 +6,7 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
+    "test": "node --test electron/*.test.js",
     "sidecar:setup": "python3 -m venv sidecar/.venv && sidecar/.venv/bin/pip install -r sidecar/requirements.txt",
     "dist": "electron-builder",
     "dist:mac": "electron-builder --mac",
@@ -23,6 +24,7 @@
     "productName": "Continuum",
     "files": [
       "electron/**/*",
+      "!electron/**/*.test.js",
       "renderer/**/*",
       "assets/**/*"
     ],

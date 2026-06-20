@@ -11,7 +11,7 @@ teammates.
 ```
 .
 ├── web/continuum/   # Next.js dashboard (D3 force graph + query sidebar + SSE)
-├── desktop/         # Electron agent + Python moondream2 vision sidecar
+├── desktop/         # Electron agent + Python Moondream vision sidecar
 ├── supabase/        # Postgres schema/RLS migrations + 6 Edge Functions
 └── scripts/         # Dev utilities (Redis VSS smoke test, etc.)
 ```
@@ -21,7 +21,7 @@ teammates.
 | Area | Path | Stack |
 | :--- | :--- | :--- |
 | Dashboard | `web/continuum` | Next.js 16, Tailwind, `@supabase/supabase-js`, `ioredis`, `d3` |
-| Desktop agent | `desktop` | Electron 32, Node 20, Python (moondream2) |
+| Desktop agent | `desktop` | Electron 32, Node 20, Python (Moondream Cloud + local fallback) |
 | Backend | `supabase` | Postgres + pgvector, Deno Edge Functions, Redis Stack (VSS) |
 
 ## Quick start
@@ -38,7 +38,7 @@ See the full design in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ### Data flows
 
-- **Observation**: desktop capture → moondream2 → privacy filter → Letta agent →
+- **Observation**: desktop capture → Moondream → privacy filter → Letta agent →
   `agent-sync` Edge Function → Postgres/Redis node → SSE broadcast → dashboard.
 - **Connection detection**: `connection-detect` cron finds cross-person
   high-similarity node pairs, classifies them with Claude Haiku, writes edges.

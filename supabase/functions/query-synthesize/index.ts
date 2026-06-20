@@ -6,12 +6,7 @@
 import { handleOptions, jsonResponse } from "../_shared/cors.ts";
 import { adminClient } from "../_shared/supabase.ts";
 import { embed } from "../_shared/embeddings.ts";
-import {
-  checkRateLimit,
-  ensureVectorIndex,
-  knnSearch,
-  redisClient,
-} from "../_shared/redis.ts";
+import { checkRateLimit, ensureVectorIndex, knnSearch, redisClient } from "../_shared/redis.ts";
 import { claude, MODELS } from "../_shared/anthropic.ts";
 import { recordSpan } from "../_shared/trace.ts";
 
@@ -138,7 +133,9 @@ Deno.serve(async (req) => {
 
   const context = subgraphNodes
     .map((n) =>
-      `- [${n.teammate}@${hhmm(n.created_at)}] id=${n.id} concept="${n.concept}" app="${n.app}" topic="${n.topic}"`
+      `- [${n.teammate}@${
+        hhmm(n.created_at)
+      }] id=${n.id} concept="${n.concept}" app="${n.app}" topic="${n.topic}"`
     )
     .join("\n");
 

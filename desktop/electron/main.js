@@ -7,6 +7,9 @@
 //   4. Run the privacy/PII filter and route the result (BLOCKED/LOCAL_ONLY/
 //      SHARED_ANON) to the user's Letta agent.
 //   5. Render an ambient glassmorphic status overlay.
+// Load desktop/.env before anything reads process.env (config.js depends on it).
+require("./env").loadEnv();
+
 const {
   app,
   BrowserWindow,
@@ -15,6 +18,8 @@ const {
   Tray,
   Menu,
   nativeImage,
+  systemPreferences,
+  shell,
 } = require("electron");
 const path = require("path");
 const config = require("./config");
@@ -32,6 +37,9 @@ let sidecar = null;
 let captureTimer = null;
 let lastFrameSignature = null;
 let paused = false;
+// Single-flight guard: moondream inference can exceed the capture interval, so
+// we never start a new analysis while one is still running.
+let inFlight = false;
 
 function createOverlay() {
   overlay = new BrowserWindow({
@@ -83,14 +91,15 @@ function hasChanged(signature) {
 }
 
 async function captureLoop() {
-  if (paused) return;
+  if (paused || inFlight || !sidecar) return;
+  inFlight = true;
   try {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
       thumbnailSize: { width: 1280, height: 720 },
     });
     const screen = sources[0];
-    if (!screen) return;
+    if (!screen || screen.thumbnail.isEmpty()) return;
 
     const png = screen.thumbnail.toPNG();
     const signature = frameSignature(png);
@@ -103,6 +112,8 @@ async function captureLoop() {
     await handleDescriptor(descriptor);
   } catch (err) {
     console.error("[capture] error:", err);
+  } finally {
+    inFlight = false;
   }
 }
 
@@ -144,10 +155,10 @@ function togglePause() {
 function rebuildTrayMenu() {
   if (!tray) return;
   const running = captureTimer !== null;
-  const menu = Menu.buildFromTemplate([
+
+  const runningItems = [
     {
       label: overlay?.isVisible() ? "Hide panel" : "Show panel",
-      enabled: running,
       click: () => {
         if (!overlay) createOverlay();
         else if (overlay.isVisible()) overlay.hide();
@@ -157,13 +168,11 @@ function rebuildTrayMenu() {
     },
     {
       label: paused ? "Resume capture" : "Pause capture",
-      enabled: running,
       click: () => togglePause(),
     },
     { type: "separator" },
     {
       label: "Sign out",
-      enabled: running,
       click: async () => {
         stopAgent();
         await auth.signOut().catch(() => {});
@@ -171,6 +180,22 @@ function rebuildTrayMenu() {
         rebuildTrayMenu();
       },
     },
+  ];
+
+  // When not running (signed out), offer a way back in instead of dead items.
+  const signedOutItems = [
+    {
+      label: "Sign in…",
+      click: () => {
+        if (loginWindow) loginWindow.focus();
+        else createLoginWindow();
+      },
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate([
+    ...(running ? runningItems : signedOutItems),
+    { type: "separator" },
     {
       label: "Quit Continuum",
       click: () => {
@@ -193,6 +218,32 @@ function createTray() {
   rebuildTrayMenu();
 }
 
+// Pure check: does the OS currently allow screen capture? (Always true off mac.)
+function hasScreenPermission() {
+  if (process.platform !== "darwin") return true;
+  return systemPreferences.getMediaAccessStatus("screen") === "granted";
+}
+
+// One-time guidance: surface the missing permission in the overlay and open the
+// relevant System Settings pane. Returns whether permission is already granted.
+function ensureScreenPermission() {
+  if (hasScreenPermission()) return true;
+  console.warn("[permission] screen recording not granted");
+  notifyOverlay({
+    decision: "BLOCKED",
+    descriptor: {
+      app: "Continuum",
+      concept: "Grant Screen Recording permission in System Settings, then restart.",
+    },
+  });
+  shell
+    .openExternal(
+      "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+    )
+    .catch(() => {});
+  return false;
+}
+
 // Resolve identity, start the sidecar + capture loop, and show the overlay.
 async function startAgent() {
   try {
@@ -208,11 +259,33 @@ async function startAgent() {
   }
 
   createOverlay();
+  // Show the overlay first so the permission guidance is visible, then gate
+  // capture on the OS permission.
+  const hasPermission = ensureScreenPermission();
+
   sidecar = new Sidecar();
   sidecar.start();
   paused = false;
+  inFlight = false;
   lastFrameSignature = null;
-  captureTimer = setInterval(captureLoop, config.captureIntervalMs);
+  if (hasPermission) {
+    captureTimer = setInterval(captureLoop, config.captureIntervalMs);
+  } else {
+    // Keep the sidecar alive but don't capture until permission is granted.
+    // Poll quietly (no repeated System Settings prompts) and switch over once
+    // the user grants access.
+    captureTimer = setInterval(() => {
+      if (hasScreenPermission()) {
+        clearInterval(captureTimer);
+        captureTimer = setInterval(captureLoop, config.captureIntervalMs);
+        notifyOverlay({
+          decision: "SHARED_ANON",
+          descriptor: { app: "Continuum", concept: "Screen capture active." },
+        });
+        rebuildTrayMenu();
+      }
+    }, 5000);
+  }
   rebuildTrayMenu();
 }
 
@@ -225,15 +298,32 @@ function stopAgent() {
   rebuildTrayMenu();
 }
 
-app.whenReady().then(async () => {
-  createTray();
-  const authed = await auth.isAuthenticated().catch(() => false);
-  if (authed) {
-    await startAgent();
-  } else {
-    createLoginWindow();
-  }
-});
+// Enforce a single running instance; focus the existing one on relaunch.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (loginWindow) {
+      loginWindow.show();
+      loginWindow.focus();
+    } else if (overlay) {
+      overlay.show();
+    }
+  });
+
+  app.whenReady().then(async () => {
+    // Ambient menu-bar agent: no dock icon on macOS.
+    app.dock?.hide();
+    createTray();
+    const authed = await auth.isAuthenticated().catch(() => false);
+    if (authed) {
+      await startAgent();
+    } else {
+      createLoginWindow();
+    }
+  });
+}
 
 ipcMain.handle("agent:toggle", () => {
   return { paused: togglePause() };

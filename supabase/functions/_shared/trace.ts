@@ -18,14 +18,15 @@ function randomHex(bytes: number): string {
   return Array.from(buf, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function toAttrList(attrs: Record<string, AttrValue>) {
+// Map a flat attribute record to OTLP key/value entries. Exported for testing:
+// integers, doubles, booleans, and strings each use a distinct OTLP value type.
+export function toAttrList(attrs: Record<string, AttrValue>) {
   return Object.entries(attrs).map(([key, v]) => {
-    const value =
-      typeof v === "number"
-        ? Number.isInteger(v) ? { intValue: v } : { doubleValue: v }
-        : typeof v === "boolean"
-        ? { boolValue: v }
-        : { stringValue: String(v) };
+    const value = typeof v === "number"
+      ? Number.isInteger(v) ? { intValue: v } : { doubleValue: v }
+      : typeof v === "boolean"
+      ? { boolValue: v }
+      : { stringValue: String(v) };
     return { key, value };
   });
 }

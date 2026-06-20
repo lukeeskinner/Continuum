@@ -1,28 +1,109 @@
-"""Continuum local vision sidecar.
+"""Continuum vision sidecar.
 
-Reads newline-delimited JSON frames from stdin, runs moondream2 locally to
-produce a structured descriptor, and writes the descriptor JSON to stdout.
+Reads newline-delimited JSON frames from stdin, sends them to Moondream Cloud
+(https://moondream.ai) when MOONDREAM_API_KEY is configured, and writes a
+structured descriptor JSON line to stdout.
 
 Protocol:
     stdin  -> {"frame": "<base64 png>"}
     stdout <- {"app": str, "topic": str, "concept": str, "error_type": str|null}
 
-moondream2 is loaded lazily so the process starts fast; if model deps are not
-installed, the sidecar falls back to an empty descriptor so the pipeline still
-runs end-to-end during development.
+If MOONDREAM_API_KEY is absent or the cloud call fails, the sidecar falls back to
+a local moondream2 model when its dependencies are installed. If neither path is
+available, it emits an empty descriptor so the desktop pipeline keeps running in
+development.
 """
+
+from __future__ import annotations
 
 import base64
 import io
 import json
+import os
+import re
 import sys
+import urllib.error
+import urllib.request
+from typing import Any
 
-_model = None
-_tokenizer = None
+_model: Any = None
+_tokenizer: Any = None
+
+MOONDREAM_API_BASE = os.getenv("MOONDREAM_API_BASE", "https://api.moondream.ai/v1").rstrip("/")
+MOONDREAM_TIMEOUT_S = float(os.getenv("MOONDREAM_TIMEOUT_S", "30"))
+DESCRIPTOR_KEYS = ("app", "topic", "concept", "error_type")
+DESCRIPTOR_PROMPT = (
+    "You are the visual intelligence layer for an ambient desktop knowledge graph. "
+    "Analyze this screenshot and identify the application or website, the technical "
+    "topic, the core concept/work being shown, and any visible error type. "
+    "Return ONLY valid compact JSON with keys: app, topic, concept, error_type. "
+    "Use null for error_type when there is no visible error. Do not include markdown."
+)
 
 
-def _load_model():
-    """Lazily load moondream2 via transformers. Returns (model, tokenizer)."""
+def _empty_descriptor() -> dict:
+    return {"app": "Unknown", "topic": "", "concept": "", "error_type": None}
+
+
+def _coerce_descriptor(value) -> dict:
+    """Coerce a JSON object or freeform model answer into the descriptor schema."""
+    if isinstance(value, str):
+        text = value.strip()
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+            if match:
+                try:
+                    value = json.loads(match.group(0))
+                except json.JSONDecodeError:
+                    value = None
+            else:
+                value = None
+        if value is None:
+            out = _empty_descriptor()
+            out["concept"] = text
+            return out
+
+    if not isinstance(value, dict):
+        return _empty_descriptor()
+
+    return {
+        "app": str(value.get("app") or "Unknown"),
+        "topic": str(value.get("topic") or ""),
+        "concept": str(value.get("concept") or ""),
+        "error_type": value.get("error_type") or None,
+    }
+
+
+def _describe_with_cloud(frame_b64: str) -> dict:
+    """Run Moondream Cloud VQA via https://api.moondream.ai/v1/query."""
+    api_key = os.getenv("MOONDREAM_API_KEY")
+    if not api_key:
+        raise RuntimeError("MOONDREAM_API_KEY is not configured")
+
+    payload = json.dumps(
+        {
+            "image_url": f"data:image/png;base64,{frame_b64}",
+            "question": DESCRIPTOR_PROMPT,
+        }
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        f"{MOONDREAM_API_BASE}/query",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-Moondream-Auth": api_key,
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=MOONDREAM_TIMEOUT_S) as resp:  # noqa: S310 - fixed HTTPS API by default
+        body = json.loads(resp.read().decode("utf-8"))
+    return _coerce_descriptor(body.get("answer", body))
+
+
+def _load_local_model():
+    """Lazily load local moondream2 via transformers. Returns (model, tokenizer)."""
     global _model, _tokenizer
     if _model is not None:
         return _model, _tokenizer
@@ -37,26 +118,12 @@ def _load_model():
     return _model, _tokenizer
 
 
-def _describe(image) -> dict:
-    """Run moondream2 and coerce its answer into our descriptor schema."""
-    model, tokenizer = _load_model()
+def _describe_with_local_model(image) -> dict:
+    """Run local moondream2 and coerce its answer into our descriptor schema."""
+    model, tokenizer = _load_local_model()
     enc = model.encode_image(image)
-    prompt = (
-        "Describe the application in use and the technical topic on screen. "
-        "Reply as JSON with keys app, topic, concept, error_type."
-    )
-    answer = model.answer_question(enc, prompt, tokenizer)
-    try:
-        parsed = json.loads(answer)
-        return {
-            "app": parsed.get("app", "Unknown"),
-            "topic": parsed.get("topic", ""),
-            "concept": parsed.get("concept", ""),
-            "error_type": parsed.get("error_type"),
-        }
-    except (json.JSONDecodeError, AttributeError):
-        # moondream returned freeform text; stash it in concept.
-        return {"app": "Unknown", "topic": "", "concept": answer, "error_type": None}
+    answer = model.answer_question(enc, DESCRIPTOR_PROMPT, tokenizer)
+    return _coerce_descriptor(answer)
 
 
 def _process(frame_b64: str) -> dict:
@@ -64,7 +131,17 @@ def _process(frame_b64: str) -> dict:
 
     raw = base64.b64decode(frame_b64)
     image = Image.open(io.BytesIO(raw)).convert("RGB")
-    return _describe(image)
+
+    try:
+        return _describe_with_cloud(frame_b64)
+    except (RuntimeError, urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        print(f"[sidecar] moondream cloud unavailable: {exc}", file=sys.stderr, flush=True)
+
+    try:
+        return _describe_with_local_model(image)
+    except Exception as exc:  # noqa: BLE001 - fallback keeps the pipe alive
+        print(f"[sidecar] local moondream unavailable: {exc}", file=sys.stderr, flush=True)
+        return _empty_descriptor()
 
 
 def main() -> None:
@@ -77,8 +154,8 @@ def main() -> None:
             descriptor = _process(msg["frame"])
         except Exception as exc:  # noqa: BLE001 - keep the pipe alive
             print(f"[sidecar] error: {exc}", file=sys.stderr, flush=True)
-            descriptor = {"app": "Unknown", "topic": "", "concept": "", "error_type": None}
-        sys.stdout.write(json.dumps(descriptor) + "\n")
+            descriptor = _empty_descriptor()
+        sys.stdout.write(json.dumps(descriptor, separators=(",", ":")) + "\n")
         sys.stdout.flush()
 
 

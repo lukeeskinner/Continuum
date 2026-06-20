@@ -12,7 +12,8 @@ import { recordSpan } from "../_shared/trace.ts";
 
 const SIMILARITY_THRESHOLD = 0.82;
 
-const CLASSIFY_SYSTEM = `You classify the relationship between two knowledge-graph nodes captured from two different teammates' screens.
+const CLASSIFY_SYSTEM =
+  `You classify the relationship between two knowledge-graph nodes captured from two different teammates' screens.
 Respond with ONLY one JSON object: {"type": "RELATED_TO" | "CONTRADICTS" | "BUILDS_ON", "explanation": string}.
 - RELATED_TO: similar concepts from different apps or times.
 - CONTRADICTS: conflicting metrics, codes, or state.
