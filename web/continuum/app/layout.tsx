@@ -1,21 +1,33 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Fraunces, Hanken_Grotesk, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import MeshField from "@/components/MeshField";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+// Display: a warm editorial serif, used with restraint (brand + statements).
+const display = Fraunces({
   subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+// Body / UI: a clean grotesque with a little character.
+const body = Hanken_Grotesk({
   subsets: ["latin"],
+  variable: "--font-body",
+  display: "swap",
+});
+
+// Data / labels: mono for the "telemetry of thought" feel.
+const mono = Geist_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono-x",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
   title: "Continuum — the mesh builds itself",
   description:
-    "Real-time, cross-person organizational knowledge graph. Just work, and the mesh builds itself.",
+    "A shared knowledge graph that weaves itself from how your team works. Just work, and the connections surface.",
 };
 
 export default function RootLayout({
@@ -26,12 +38,10 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${display.variable} ${body.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full">
-        <div className="aurora" aria-hidden>
-          <div className="aurora-blob" />
-        </div>
+        <MeshField />
         {children}
       </body>
     </html>

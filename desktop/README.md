@@ -1,7 +1,7 @@
 # Continuum Desktop Agent
 
 Ambient Electron agent that captures screen context, extracts a structured
-descriptor with Moondream visual intelligence, applies a privacy/PII filter, and
+descriptor with Anthropic Claude vision, applies a privacy/PII filter, and
 syncs approved observations into the team knowledge graph.
 
 ## Layout
@@ -21,7 +21,7 @@ desktop/
 │   ├── browserbase.js    # Opt-in URL enrichment trigger
 │   └── preload.js        # Secure renderer bridge
 ├── renderer/             # Login window + glassmorphic status overlay
-├── sidecar/              # Python Moondream vision sidecar
+├── sidecar/              # Python Anthropic Claude vision sidecar
 └── assets/               # Tray icon
 ```
 
@@ -29,9 +29,9 @@ desktop/
 
 ```bash
 cd desktop
-cp .env.example .env        # fill in Supabase + Letta + Moondream values
+cp .env.example .env        # fill in Supabase + Letta + Anthropic values
 npm install                 # Electron + supabase-js
-npm run sidecar:setup       # create venv + install PIL/local fallback deps
+npm run sidecar:setup       # create venv + install anthropic deps
 ```
 
 `.env` is loaded automatically at startup (`electron/env.js`) — no need to
@@ -39,7 +39,7 @@ export anything into your shell. Real environment variables take precedence over
 `.env`, so CI/shell overrides still work.
 
 Minimum config for the graph sync to work: `SUPABASE_URL`, `SUPABASE_ANON_KEY`,
-`SUPABASE_FUNCTIONS_URL`, `AGENT_SYNC_SECRET`, and `MOONDREAM_API_KEY` for cloud
+`SUPABASE_FUNCTIONS_URL`, `AGENT_SYNC_SECRET`, and `ANTHROPIC_API_KEY` for
 vision. `LETTA_*` is optional (per-user memory). `CONTINUUM_USER_ID` /
 `CONTINUUM_CLUSTER_ID` are only fallbacks — normally they're resolved from the
 signed-in user's profile.
@@ -64,11 +64,9 @@ automatically once you grant it.
    frames (`FRAME_DELTA_THRESHOLD`). A single-flight guard prevents overlapping
    inference when the model is slow.
 2. The frame (base64 PNG) is piped to `sidecar/sidecar.py`, which calls
-   Moondream Cloud (`MOONDREAM_API_KEY`) and returns
-   `{ app, topic, concept, error_type }`. If cloud credentials are absent or the
-   API is temporarily unavailable, it falls back to local moondream2 when the
-   local model dependencies are installed. The sidecar auto-restarts if it dies,
-   and each request has a timeout.
+   Anthropic Claude vision (`ANTHROPIC_API_KEY`, model `CONTINUUM_MODEL`) and
+   returns `{ app, topic, concept, error_type }`. The sidecar auto-restarts if
+   it dies, and each request has a timeout.
 3. `privacy.classify()` labels the descriptor:
    - **BLOCKED** — dropped on-device, never leaves the machine.
    - **LOCAL_ONLY** — sent to the user's Letta agent only.

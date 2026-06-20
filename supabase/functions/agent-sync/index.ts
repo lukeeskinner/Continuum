@@ -9,6 +9,7 @@ import { adminClient } from "../_shared/supabase.ts";
 import { embed } from "../_shared/embeddings.ts";
 import {
   cacheNode,
+  checkRateLimit,
   ensureVectorIndex,
   publishEvent,
   redisClient,
@@ -46,6 +47,19 @@ Deno.serve(async (req) => {
   const { user_id, cluster_id, descriptor } = body;
   if (!user_id || !cluster_id || !descriptor) {
     return jsonResponse({ error: "missing fields" }, 400);
+  }
+
+  // Rate-limit BEFORE any paid work (the OpenAI embedding below). Uses the
+  // shared sliding-window helper: INCR ratelimit:user:{user_id}:min, 60s TTL on
+  // first write, block (429) when the count exceeds 50,000/min. Redis is
+  // best-effort — if it is unreachable we log and proceed, since Postgres
+  // remains the source of truth for the synced node.
+  try {
+    const redis = await redisClient();
+    const allowed = await checkRateLimit(redis, user_id);
+    if (!allowed) return jsonResponse({ error: "rate limit exceeded" }, 429);
+  } catch (err) {
+    console.error("rate limit check skipped:", err);
   }
 
   const rawDescriptor = JSON.stringify(descriptor);

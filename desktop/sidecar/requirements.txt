@@ -1,9 +1,2 @@
-# Vision sidecar dependencies. Moondream Cloud uses stdlib urllib; these packages
-# support PNG decoding plus the optional local moondream2 fallback.
-transformers>=4.44.2
-torch>=2.4.1
-pillow>=10.4.0
-einops>=0.8.0
-# moondream2's remote code may also require:
-torchvision>=0.19.1
-
+anthropic>=0.40.0
+python-dotenv>=1.0.0

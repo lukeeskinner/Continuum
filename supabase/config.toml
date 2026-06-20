@@ -61,3 +61,7 @@ verify_jwt = false
 
 [functions.voice-transcribe]
 verify_jwt = true
+
+# Frontend-invoked: returns the cluster graph (nodes + edges) for D3 rendering.
+[functions.cluster-graph]
+verify_jwt = true

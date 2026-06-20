@@ -12,22 +12,47 @@
   </head>
   <body>
     <div class="panel">
+
       <header class="panel__header">
-        <span class="dot" id="status-dot"></span>
-        <h1>Continuum</h1>
-        <button id="toggle" class="toggle">Pause</button>
-        <button id="signout" class="toggle">Sign out</button>
+        <div class="header__left">
+          <span class="status-dot" id="status-dot"></span>
+          <span class="logo">Continuum</span>
+        </div>
+        <div class="header__right">
+          <button id="toggle" class="btn">Pause</button>
+          <button id="signout" class="btn btn--ghost">↪</button>
+        </div>
       </header>
 
-      <section class="state">
-        <p class="state__decision" id="decision">Idle</p>
-        <p class="state__concept" id="concept">Waiting for activity…</p>
+      <div class="stats-row">
+        <div class="stat">
+          <span class="stat__value" id="sync-count">0</span>
+          <span class="stat__label">synced</span>
+        </div>
+        <div class="stat">
+          <span class="stat__value" id="session-count">0</span>
+          <span class="stat__label">captured</span>
+        </div>
+        <div class="stat">
+          <span class="stat__value" id="block-count">0</span>
+          <span class="stat__label">blocked</span>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <section class="observations">
+        <div class="section-label">RECENT ACTIVITY</div>
+        <ul id="obs-list">
+          <li class="obs-empty">Watching your screen…</li>
+        </ul>
       </section>
 
-      <section class="log">
-        <h2>Recent observations</h2>
-        <ul id="log-list"></ul>
-      </section>
+      <div class="current" id="current" style="display:none">
+        <div class="current__app" id="current-app"></div>
+        <div class="current__topic" id="current-topic"></div>
+      </div>
+
     </div>
     <script src="renderer.js"></script>
   </body>

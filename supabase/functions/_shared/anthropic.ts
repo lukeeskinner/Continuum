@@ -3,19 +3,16 @@
 // Model note: Haiku for all high-frequency tasks (classification, connection
 // detection), Sonnet only for user-facing query synthesis.
 import { ENV } from "./env.ts";
-
 export const MODELS = {
   // Fast/cheap relationship classification.
   HAIKU: "claude-haiku-4-5",
   // Citation-aware synthesis.
   SONNET: "claude-sonnet-4-6",
 } as const;
-
 interface ClaudeMessage {
   role: "user" | "assistant";
   content: string;
 }
-
 export async function claude(opts: {
   model: string;
   system: string;
@@ -32,18 +29,15 @@ export async function claude(opts: {
     body: JSON.stringify({
       model: opts.model,
       max_tokens: opts.maxTokens ?? 1024,
-      // cache_control marks the system prompt as a reusable cache breakpoint.
       system: [
         { type: "text", text: opts.system, cache_control: { type: "ephemeral" } },
       ],
       messages: opts.messages,
     }),
   });
-
   if (!res.ok) {
     throw new Error(`Anthropic call failed: ${res.status} ${await res.text()}`);
   }
-
   const json = await res.json();
   return json.content?.[0]?.text ?? "";
 }
