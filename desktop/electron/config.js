@@ -29,8 +29,12 @@ module.exports = {
 
   // Capture tuning.
   captureIntervalMs: Number(process.env.CAPTURE_INTERVAL_MS || 4000),
-  // Mean per-pixel delta (0-255) above which a frame is considered "changed".
-  frameDeltaThreshold: Number(process.env.FRAME_DELTA_THRESHOLD || 6),
+  // Perceptual-hash distance (0-64, 8x8 aHash) above which two frames are
+  // considered different. Below this, plus a small RGB-distance check, a
+  // frame is dropped as a duplicate (see dedupe.js).
+  hashDistanceThreshold: Number(process.env.HASH_DISTANCE_THRESHOLD || 10),
+  // Local OCR (tesseract.js) text extraction merged into each descriptor.
+  ocrEnabled: process.env.OCR_ENABLED !== "false",
 
   // Python sidecar.
   pythonPath: process.env.PYTHON_PATH || "python3",

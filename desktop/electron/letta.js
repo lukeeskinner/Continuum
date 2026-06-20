@@ -11,7 +11,8 @@ async function postMessage(descriptor) {
   const message =
     `User is active on ${descriptor.app}. Visual analysis: ` +
     `topic='${descriptor.topic}', concept='${descriptor.concept}', ` +
-    `error_type='${descriptor.error_type ?? "null"}'.`;
+    `error_type='${descriptor.error_type ?? "null"}'.` +
+    (descriptor.ocr_text ? ` On-screen text: '${descriptor.ocr_text}'.` : "");
 
   const res = await fetch(
     `${config.lettaBaseUrl}/v1/agents/${config.lettaAgentId}/messages`,

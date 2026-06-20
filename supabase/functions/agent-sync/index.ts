@@ -19,6 +19,8 @@ interface Descriptor {
   topic: string;
   concept: string;
   error_type: string | null;
+  // Locally-extracted on-screen text (tesseract.js), best-effort.
+  ocr_text?: string;
 }
 
 interface AgentSyncBody {
@@ -50,7 +52,8 @@ Deno.serve(async (req) => {
 
   const rawDescriptor = JSON.stringify(descriptor);
   const embedText = `${descriptor.app} | ${descriptor.topic} | ${descriptor.concept}` +
-    (descriptor.error_type ? ` | ${descriptor.error_type}` : "");
+    (descriptor.error_type ? ` | ${descriptor.error_type}` : "") +
+    (descriptor.ocr_text ? ` | ${descriptor.ocr_text}` : "");
   const embedding = await embed(embedText);
 
   const supabase = adminClient();
@@ -63,6 +66,7 @@ Deno.serve(async (req) => {
       topic: descriptor.topic,
       concept: descriptor.concept,
       error_type: descriptor.error_type,
+      ocr_text: descriptor.ocr_text ?? null,
       raw_descriptor: rawDescriptor,
       embedding,
     })

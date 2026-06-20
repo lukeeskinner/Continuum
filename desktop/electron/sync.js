@@ -32,6 +32,7 @@ async function pushNode(descriptor) {
         topic: descriptor.topic,
         concept: descriptor.concept,
         error_type: descriptor.error_type ?? null,
+        ocr_text: descriptor.ocr_text ?? null,
       },
     }),
   });

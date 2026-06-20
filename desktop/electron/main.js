@@ -29,13 +29,16 @@ const letta = require("./letta");
 const sync = require("./sync");
 const browserbase = require("./browserbase");
 const auth = require("./auth");
+const { FrameDeduper } = require("./dedupe");
+const { classifyCaptureSurfacePolicy, SKIP_FRAME } = require("./admission");
+const ocr = require("./ocr");
 
 let overlay = null;
 let loginWindow = null;
 let tray = null;
 let sidecar = null;
 let captureTimer = null;
-let lastFrameSignature = null;
+let deduper = new FrameDeduper();
 let paused = false;
 // Single-flight guard: moondream inference can exceed the capture interval, so
 // we never start a new analysis while one is still running.
@@ -76,24 +79,26 @@ function createLoginWindow() {
   loginWindow.on("closed", () => (loginWindow = null));
 }
 
-// Cheap perceptual signature: downsample-free mean over a sampled byte stride.
-function frameSignature(buffer) {
-  let sum = 0;
-  const stride = Math.max(1, Math.floor(buffer.length / 4096));
-  for (let i = 0; i < buffer.length; i += stride) sum += buffer[i];
-  return sum;
-}
-
-function hasChanged(signature) {
-  if (lastFrameSignature === null) return true;
-  const delta = Math.abs(signature - lastFrameSignature);
-  return delta > config.frameDeltaThreshold * 4096;
+// Best-effort active-window lookup for the admission policy. Falls back to
+// "unknown" surfaces (always Normal) on platforms/sandboxes where the native
+// active-win binary isn't available.
+async function activeSurface() {
+  try {
+    const activeWin = require("active-win");
+    const win = await activeWin();
+    return { appName: win?.owner?.name ?? "", windowTitle: win?.title ?? "" };
+  } catch {
+    return { appName: "", windowTitle: "" };
+  }
 }
 
 async function captureLoop() {
   if (paused || inFlight || !sidecar) return;
   inFlight = true;
   try {
+    const surface = await activeSurface();
+    if (classifyCaptureSurfacePolicy(surface) === SKIP_FRAME) return;
+
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
       thumbnailSize: { width: 1280, height: 720 },
@@ -102,12 +107,14 @@ async function captureLoop() {
     if (!screen || screen.thumbnail.isEmpty()) return;
 
     const png = screen.thumbnail.toPNG();
-    const signature = frameSignature(png);
-    if (!hasChanged(signature)) return;
-    lastFrameSignature = signature;
+    if (deduper.isDuplicate(screen.thumbnail, png, config.hashDistanceThreshold)) return;
 
-    const descriptor = await sidecar.analyze(png.toString("base64"));
+    const [descriptor, ocrText] = await Promise.all([
+      sidecar.analyze(png.toString("base64")),
+      config.ocrEnabled ? ocr.extractText(png) : Promise.resolve(""),
+    ]);
     if (!descriptor) return;
+    if (ocrText) descriptor.ocr_text = ocrText;
 
     await handleDescriptor(descriptor);
   } catch (err) {
@@ -267,7 +274,7 @@ async function startAgent() {
   sidecar.start();
   paused = false;
   inFlight = false;
-  lastFrameSignature = null;
+  deduper = new FrameDeduper();
   if (hasPermission) {
     captureTimer = setInterval(captureLoop, config.captureIntervalMs);
   } else {
@@ -294,6 +301,7 @@ function stopAgent() {
   captureTimer = null;
   sidecar?.stop();
   sidecar = null;
+  ocr.shutdown().catch(() => {});
   overlay?.close();
   rebuildTrayMenu();
 }

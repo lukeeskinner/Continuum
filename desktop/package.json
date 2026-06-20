@@ -13,7 +13,9 @@
     "dist:win": "electron-builder --win"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.4"
+    "@supabase/supabase-js": "^2.45.4",
+    "active-win": "^8.2.1",
+    "tesseract.js": "^5.1.1"
   },
   "devDependencies": {
     "electron": "32.2.7",
