@@ -1,11 +1,12 @@
 "use client";
 
-// Shared chrome. Navigation is rendered as a "spine": each section is a node
-// threaded on a vertical line, the active one lit — you move along the mesh.
-// The topbar is a thin instrument status line.
+// Shared chrome. Navigation is a "spine": each section is a node threaded on a
+// vertical line, the active one lit. Cluster + member data come from context.
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CLUSTER, TEAMMATES, ACCENTS } from "@/lib/mock";
+import { useAuth } from "./auth";
+import { useCluster } from "./cluster";
+import { accentForUser, initials, displayName } from "@/lib/ui";
 import { IconPlus } from "./icons";
 
 const NAV = [
@@ -21,7 +22,14 @@ function isActive(pathname: string, href: string, end?: boolean) {
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const online = TEAMMATES.filter((t) => t.online);
+  const { user, signOut } = useAuth();
+  const { active, members } = useCluster();
+
+  const me = {
+    id: user?.id ?? "me",
+    name: (user?.user_metadata?.full_name as string) || user?.email || "You",
+    accent: accentForUser(user?.id ?? "me"),
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -34,12 +42,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           />
           <span className="font-display text-[22px] leading-none">Continuum</span>
         </Link>
-        <p className="eyebrow mt-2.5">the mesh builds itself</p>
+        <p className="eyebrow mt-2.5 truncate">{active ? active.name : "the mesh builds itself"}</p>
 
         <nav className="relative mt-8 flex flex-col gap-0.5">
           <span aria-hidden className="absolute bottom-3 left-[15px] top-3 w-px bg-line" />
           {NAV.map(({ href, label, end }) => {
-            const active = isActive(pathname, href, end);
+            const on = isActive(pathname, href, end);
             return (
               <Link
                 key={href}
@@ -50,27 +58,18 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                   <span
                     className="block rounded-full transition-all"
                     style={
-                      active
+                      on
                         ? {
                             width: 11,
                             height: 11,
                             background: "var(--brand)",
                             boxShadow: "0 0 0 4px color-mix(in srgb, var(--brand) 20%, transparent)",
                           }
-                        : {
-                            width: 9,
-                            height: 9,
-                            background: "var(--surface)",
-                            border: "1.5px solid var(--ink-faint)",
-                          }
+                        : { width: 9, height: 9, background: "var(--surface)", border: "1.5px solid var(--ink-faint)" }
                     }
                   />
                 </span>
-                <span
-                  className={`text-[14px] transition-colors ${
-                    active ? "font-medium text-ink" : "text-ink-soft group-hover:text-ink"
-                  }`}
-                >
+                <span className={`text-[14px] transition-colors ${on ? "font-medium text-ink" : "text-ink-soft group-hover:text-ink"}`}>
                   {label}
                 </span>
               </Link>
@@ -79,31 +78,26 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         </nav>
 
         <div className="mt-auto flex flex-col gap-4">
-          <Link
-            href="/manage"
-            className="card card-hover flex items-center gap-2 px-3 py-2.5"
-          >
-            <span className="eyebrow">invite</span>
-            <span className="tnum ml-auto text-[12px] text-ink">{CLUSTER.inviteCode}</span>
-          </Link>
           <div className="flex items-center gap-2.5">
             <span
-              className="grid h-8 w-8 place-items-center rounded-full text-[11px] font-semibold text-[#0b0e1a]"
-              style={{ background: ACCENTS.lavender }}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-[#0b0e1a]"
+              style={{ background: me.accent }}
             >
-              LS
+              {initials(me.name)}
             </span>
-            <div className="min-w-0">
-              <p className="truncate text-[13px] font-medium leading-tight">Luke Skinner</p>
-              <p className="eyebrow mt-0.5">manager</p>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[13px] font-medium leading-tight">{me.name}</p>
+              <p className="eyebrow mt-0.5">{active?.role ?? "—"}</p>
             </div>
+            <button onClick={() => signOut()} title="Sign out" className="eyebrow hover:text-ink">
+              exit
+            </button>
           </div>
         </div>
       </aside>
 
       {/* ---------------- Main column ---------------- */}
       <div className="flex h-screen min-w-0 flex-1 flex-col">
-        {/* Instrument status line */}
         <header className="z-20 flex h-14 shrink-0 items-center gap-4 border-b border-line/70 px-5 backdrop-blur-xl sm:px-6">
           <Link href="/" className="flex items-center gap-2 md:hidden">
             <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--brand)" }} />
@@ -113,28 +107,32 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="hidden items-center gap-2 md:flex">
             <span className="signal-dot" />
             <span className="eyebrow">
-              live<span className="mx-2 text-line">/</span>
-              <span className="text-ink-soft">{online.length} observing now</span>
+              {active?.name ?? "no cluster"}
+              <span className="mx-2 text-line">/</span>
+              <span className="text-ink-soft">{members.length} members</span>
             </span>
           </div>
 
           <div className="ml-auto flex items-center gap-3">
             <div className="hidden items-center sm:flex">
-              {online.slice(0, 5).map((t, i) => (
-                <span
-                  key={t.id}
-                  title={`${t.name} — ${t.focus}`}
-                  className="grid h-7 w-7 place-items-center rounded-full text-[10px] font-semibold text-[#0b0e1a] ring-2 ring-[#0b0e1a]"
-                  style={{ background: ACCENTS[t.accent], marginLeft: i === 0 ? 0 : -7 }}
-                >
-                  {t.initials}
-                </span>
-              ))}
+              {members.slice(0, 5).map((m, i) => {
+                const name = displayName(m.profiles);
+                return (
+                  <span
+                    key={m.user_id}
+                    title={name}
+                    className="grid h-7 w-7 place-items-center rounded-full text-[10px] font-semibold text-[#0b0e1a] ring-2 ring-[#0b0e1a]"
+                    style={{ background: accentForUser(m.user_id), marginLeft: i === 0 ? 0 : -7 }}
+                  >
+                    {initials(name)}
+                  </span>
+                );
+              })}
             </div>
-            <button className="btn-grad flex items-center gap-1.5 px-3.5 py-2 text-[13px]">
+            <Link href="/manage" className="btn-grad flex items-center gap-1.5 px-3.5 py-2 text-[13px]">
               <IconPlus width={15} height={15} />
               <span className="hidden sm:inline">Invite</span>
-            </button>
+            </Link>
           </div>
         </header>
 
@@ -144,20 +142,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       {/* ---------------- Mobile bottom nav ---------------- */}
       <nav className="fixed inset-x-0 bottom-0 z-30 flex items-center justify-around border-t border-line bg-[rgba(11,14,26,0.85)] px-2 py-2.5 backdrop-blur-xl md:hidden">
         {NAV.map(({ href, label, end }) => {
-          const active = isActive(pathname, href, end);
+          const on = isActive(pathname, href, end);
           return (
             <Link key={href} href={href} className="flex flex-col items-center gap-1.5">
               <span
                 className="rounded-full"
-                style={
-                  active
-                    ? { width: 9, height: 9, background: "var(--brand)" }
-                    : { width: 7, height: 7, background: "var(--ink-faint)" }
-                }
+                style={on ? { width: 9, height: 9, background: "var(--brand)" } : { width: 7, height: 7, background: "var(--ink-faint)" }}
               />
-              <span className={`text-[10px] ${active ? "text-ink" : "text-ink-faint"}`}>
-                {label.split(" ")[0]}
-              </span>
+              <span className={`text-[10px] ${on ? "text-ink" : "text-ink-faint"}`}>{label.split(" ")[0]}</span>
             </Link>
           );
         })}

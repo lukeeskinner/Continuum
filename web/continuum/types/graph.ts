@@ -45,11 +45,20 @@ export type ClusterEvent =
   | { event: "node_added"; data: SemanticNode }
   | { event: "edge_added"; data: { id: string; source: string; target: string; type: EdgeType } };
 
-// query-synthesize response shape.
+// query-synthesize response shape. `answer` is plain prose with inline
+// citations of the form [Name@HH:MM]; the subgraph lists the cited nodes/edges.
 export interface QueryResult {
   answer: string;
   subgraph: {
-    nodes: Array<{ id: string; label?: string; concept?: string; teammate?: string }>;
-    edges: Array<{ source?: string; target?: string; source_node_id?: string; target_node_id?: string; type: EdgeType }>;
+    nodes: Array<{
+      id: string;
+      label?: string;
+      concept?: string;
+      app?: string;
+      topic?: string;
+      teammate?: string;
+      created_at?: string;
+    }>;
+    edges: Array<{ source: string; target: string; type: EdgeType }>;
   };
 }

@@ -1,11 +1,16 @@
-import AppShell from "@/components/AppShell";
+import { AuthProvider } from "@/components/auth";
+import DashboardGate from "@/components/DashboardGate";
 
-// Layout for the authenticated dashboard surface. Standalone routes like
-// /join/[code] live outside this group so they render without the app chrome.
+// Authenticated dashboard surface. The gate handles session/login; standalone
+// routes like /onboard live outside this group so they render without chrome.
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  return <AppShell>{children}</AppShell>;
+  return (
+    <AuthProvider>
+      <DashboardGate>{children}</DashboardGate>
+    </AuthProvider>
+  );
 }
