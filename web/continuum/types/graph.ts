@@ -32,10 +32,6 @@ export interface GraphNode {
   teammate: string;
   // Stable color key (per teammate) assigned client-side.
   colorKey: string;
-  // Optional metadata, populated from real semantic_nodes (absent for mock).
-  topic?: string;
-  errorType?: string | null;
-  createdAt?: string | null;
 }
 
 export interface GraphLink {
@@ -49,7 +45,8 @@ export type ClusterEvent =
   | { event: "node_added"; data: SemanticNode }
   | { event: "edge_added"; data: { id: string; source: string; target: string; type: EdgeType } };
 
-// query-synthesize response shape.
+// query-synthesize response shape. `answer` is plain prose with inline
+// citations of the form [Name@HH:MM]; the subgraph lists the cited nodes/edges.
 export interface QueryResult {
   answer: string;
   subgraph: {
@@ -60,7 +57,8 @@ export interface QueryResult {
       app?: string;
       topic?: string;
       teammate?: string;
+      created_at?: string;
     }>;
-    edges: Array<{ source?: string; target?: string; source_node_id?: string; target_node_id?: string; type: EdgeType }>;
+    edges: Array<{ source: string; target: string; type: EdgeType }>;
   };
 }

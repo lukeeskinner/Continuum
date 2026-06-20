@@ -1,120 +1,118 @@
 "use client";
 
-// Invite redemption. The link from `user-invite` lands here with ?token=...;
-// the new teammate sets a name + password, which calls `user-onboard` to create
-// their account, provision a Letta agent, and join the cluster. We then sign
-// them in and send them to the dashboard.
+// Invite redemption (/onboard?token=…). Posts to the `user-onboard` Edge
+// Function, which validates the token, creates the account, and links the
+// cluster. Standalone — renders without the dashboard chrome.
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
-import { callFunction } from "@/lib/functions";
-import { createBrowserClient } from "@/lib/supabase/client";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { getSupabase } from "@/lib/supabase/client";
 
-interface OnboardResponse {
-  onboarded: boolean;
-  user_id: string;
-  letta_agent_id: string | null;
-}
-
-function OnboardForm() {
-  const router = useRouter();
+function OnboardInner() {
   const params = useSearchParams();
   const token = params.get("token") ?? "";
-
-  const [email, setEmail] = useState("");
   const [fullName, setFullName] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    setError("");
-    if (!token) {
-      setError("Missing invite token. Use the link from your invite email.");
+    if (!token || !fullName.trim() || password.length < 8) return;
+    setBusy(true);
+    setError(null);
+    const { error } = await getSupabase().functions.invoke("user-onboard", {
+      body: { token, full_name: fullName.trim(), password },
+    });
+    setBusy(false);
+    if (error) {
+      setError(error.message || "Couldn't redeem this invite.");
       return;
     }
-    setLoading(true);
-    try {
-      await callFunction<OnboardResponse>("user-onboard", {
-        token,
-        full_name: fullName,
-        password,
-      });
-      // Sign in with the invited email + chosen password, then enter the app.
-      const supabase = createBrowserClient();
-      const { error: signInErr } = await supabase.auth.signInWithPassword({
-        email,
-        password,
-      });
-      if (signInErr) {
-        // Account exists; let them sign in manually.
-        router.replace("/login");
-        return;
-      }
-      router.replace("/");
-    } catch (err) {
-      setError(String(err instanceof Error ? err.message : err));
-    } finally {
-      setLoading(false);
-    }
+    setDone(true);
   }
 
   return (
-    <form
-      onSubmit={submit}
-      className="w-full max-w-sm rounded-xl border border-zinc-800 bg-zinc-950 p-6"
-    >
-      <h1 className="text-lg font-semibold">Join your workspace</h1>
-      <p className="mb-6 text-xs text-zinc-500">Set up your Continuum account.</p>
+    <main className="flex min-h-screen items-center justify-center px-5 py-10">
+      <div className="w-full max-w-md">
+        <div className="mb-7 flex items-center justify-center gap-2.5">
+          <span className="h-2.5 w-2.5 rounded-full" style={{ background: "var(--brand)" }} />
+          <span className="font-display text-xl">Continuum</span>
+        </div>
 
-      <label className="mb-1 block text-xs text-zinc-400">
-        Email (the one you were invited with)
-      </label>
-      <input
-        type="email"
-        required
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
-        className="mb-4 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-      />
+        <div className="glass fade-up rounded-2xl p-8">
+          {done ? (
+            <div className="py-2 text-center">
+              <span className="signal-dot pop-in mx-auto mb-6 block !h-3 !w-3" />
+              <h1 className="font-display text-[2rem]">You&apos;re in</h1>
+              <p className="mt-3 text-[14px] text-ink-soft">
+                Your account is set up. Sign in to enter the mesh.
+              </p>
+              <Link href="/" className="btn-grad mt-6 inline-block px-5 py-2.5 text-[14px]">
+                Go to sign in →
+              </Link>
+            </div>
+          ) : !token ? (
+            <div className="text-center">
+              <p className="eyebrow">Invalid link</p>
+              <h1 className="font-display mt-3 text-[2rem]">No invite token</h1>
+              <p className="mt-3 text-[14px] text-ink-soft">Ask your manager for a fresh invite link.</p>
+            </div>
+          ) : (
+            <>
+              <p className="eyebrow">Redeem invite</p>
+              <h1 className="font-display mt-3 text-[2rem] leading-tight">
+                Join the <span className="italic text-brand">mesh.</span>
+              </h1>
+              <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5">
+                  <label className="eyebrow" htmlFor="name">Full name</label>
+                  <input
+                    id="name"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    placeholder="Ada Lovelace"
+                    className="w-full rounded-[10px] border border-line bg-surface-2 px-3.5 py-2.5 text-[14px] outline-none transition focus:border-brand"
+                  />
+                </div>
+                <div className="flex flex-col gap-1.5">
+                  <label className="eyebrow" htmlFor="pw">Password</label>
+                  <input
+                    id="pw"
+                    type="password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="at least 8 characters"
+                    className="w-full rounded-[10px] border border-line bg-surface-2 px-3.5 py-2.5 text-[14px] outline-none transition focus:border-brand"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={busy || !fullName.trim() || password.length < 8}
+                  className="btn-grad mt-1 py-2.5 text-[14px] disabled:opacity-40"
+                >
+                  {busy ? "Joining…" : "Create account →"}
+                </button>
+                {error && <p className="text-[12.5px] text-[var(--edge-contradicts)]">{error}</p>}
+              </form>
+              <p className="mt-5 text-[12px] leading-relaxed text-ink-faint">
+                Your screen agent stays on your machine. Only meaning is shared.
+              </p>
+            </>
+          )}
+        </div>
 
-      <label className="mb-1 block text-xs text-zinc-400">Full name</label>
-      <input
-        required
-        value={fullName}
-        onChange={(e) => setFullName(e.target.value)}
-        className="mb-4 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-      />
-
-      <label className="mb-1 block text-xs text-zinc-400">Password</label>
-      <input
-        type="password"
-        required
-        minLength={8}
-        value={password}
-        onChange={(e) => setPassword(e.target.value)}
-        className="mb-4 w-full rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
-      />
-
-      {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
-
-      <button
-        type="submit"
-        disabled={loading}
-        className="w-full rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
-      >
-        {loading ? "Joining…" : "Join workspace"}
-      </button>
-    </form>
+        <p className="eyebrow mt-6 text-center">Continuum · the mesh builds itself</p>
+      </div>
+    </main>
   );
 }
 
 export default function OnboardPage() {
   return (
-    <main className="flex min-h-screen items-center justify-center bg-black text-zinc-100">
-      <Suspense fallback={<p className="text-zinc-500">Loading…</p>}>
-        <OnboardForm />
-      </Suspense>
-    </main>
+    <Suspense fallback={<main className="grid min-h-screen place-items-center"><span className="eyebrow">loading…</span></main>}>
+      <OnboardInner />
+    </Suspense>
   );
 }

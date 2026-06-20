@@ -20,8 +20,7 @@ import { select } from "d3-selection";
 import { drag } from "d3-drag";
 import "d3-transition";
 import type { EdgeType, GraphLink, GraphNode } from "@/types/graph";
-import { EDGE_META } from "@/lib/mock";
-import { colorForKey } from "@/lib/colors";
+import { EDGE_META, accentForUser } from "@/lib/ui";
 
 type SimNode = GraphNode & SimulationNodeDatum & { deg?: number };
 type SimLink = { source: SimNode; target: SimNode; type: EdgeType };
@@ -200,13 +199,13 @@ export default function GraphCanvas({ nodes, links, onNodeClick, highlightIds }:
     nodeEnter
       .append("circle")
       .attr("class", "halo")
-      .attr("fill", (d) => colorForKey(d.colorKey))
+      .attr("fill", (d) => accentForUser(d.teammate))
       .attr("opacity", 0.22);
     // core
     nodeEnter
       .append("circle")
       .attr("class", "core")
-      .attr("fill", (d) => colorForKey(d.colorKey))
+      .attr("fill", (d) => accentForUser(d.teammate))
       .attr("stroke", "#0b0e1a")
       .attr("stroke-width", 2.5);
     // label

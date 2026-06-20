@@ -1,62 +1,69 @@
 "use client";
 
-// Ask-the-mesh query interface. Text input + push-to-talk voice capture route
-// to the real Edge Functions: voice -> `voice-transcribe`, query ->
-// `query-synthesize`. Renders the synthesized answer with teammate attribution
-// cards, a citation list, and the contributing subgraph.
+// Ask-the-mesh. Posts to the `query-synthesize` Edge Function (which the
+// browser client authorizes with the current session JWT), then renders the
+// citation-aware answer + the contributing subgraph it returns.
 import { useMemo, useRef, useState } from "react";
 import GraphCanvas from "@/components/GraphCanvas";
-import { useCluster } from "@/components/ClusterProvider";
-import { callFunction, callFunctionRaw } from "@/lib/functions";
-import { colorForKey, initialsFor } from "@/lib/colors";
-import { EDGE_META } from "@/lib/mock";
+import { useCluster } from "@/components/cluster";
+import { getSupabase } from "@/lib/supabase/client";
+import { EDGE_META, accentForUser } from "@/lib/ui";
 import type { GraphLink, GraphNode, QueryResult } from "@/types/graph";
-import { IconMic, IconSend } from "@/components/icons";
+import { IconSend, IconMic } from "@/components/icons";
 
 type Status = "idle" | "thinking" | "answered" | "error";
 
-const SUGGESTED_QUERIES = [
-  "What is the team working on right now?",
-  "Has anyone run into this error before?",
-  "Who knows the most about our auth setup?",
-  "Summarize recent work across the team.",
+const SUGGESTED = [
+  "Who's working on attention numerical stability?",
+  "Has anyone hit this Supabase RLS issue before?",
+  "What do we know about pgvector index tuning?",
+  "Any conflicting findings worth reconciling?",
 ];
 
-interface TranscribeResult {
-  transcript: string;
+// Split prose into plain text + [Name@HH:MM] citation chunks.
+function renderAnswer(text: string) {
+  return text.split(/(\[[^\]]+\])/g).map((part, i) =>
+    /^\[[^\]]+\]$/.test(part) ? (
+      <mark key={i} className="cite">
+        {part}
+      </mark>
+    ) : (
+      <span key={i}>{part}</span>
+    ),
+  );
 }
 
 export default function QueryPage() {
-  const { activeClusterId } = useCluster();
+  const { active } = useCluster();
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<Status>("idle");
-  const [recording, setRecording] = useState(false);
   const [result, setResult] = useState<QueryResult | null>(null);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [recording, setRecording] = useState(false);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
 
   async function ask(q?: string) {
     const text = (q ?? query).trim();
-    if (!text || !activeClusterId) return;
+    if (!text || !active) return;
     setQuery(text);
     setStatus("thinking");
     setResult(null);
-    setError("");
-    try {
-      const data = await callFunction<QueryResult>("query-synthesize", {
-        query: text,
-        cluster_id: activeClusterId,
-      });
-      setResult(data);
-      setStatus("answered");
-    } catch (err) {
-      setError(String(err instanceof Error ? err.message : err));
+    setError(null);
+    const { data, error } = await getSupabase().functions.invoke("query-synthesize", {
+      body: { query: text, cluster_id: active.id },
+    });
+    if (error) {
+      setError(error.message || "Something went wrong synthesizing an answer.");
       setStatus("error");
+      return;
     }
+    setResult(data as QueryResult);
+    setStatus("answered");
   }
 
+  // Push-to-talk: record a clip, transcribe it via `voice-transcribe`, then ask.
   async function startRecording() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
@@ -67,43 +74,40 @@ export default function QueryPage() {
       };
       recorder.onstop = async () => {
         stream.getTracks().forEach((t) => t.stop());
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType });
+        const mime = recorder.mimeType || "audio/webm";
+        const blob = new Blob(chunksRef.current, { type: mime });
         setStatus("thinking");
-        try {
-          const { transcript } = await callFunctionRaw<TranscribeResult>(
-            "voice-transcribe",
-            blob,
-            recorder.mimeType || "audio/webm",
-          );
-          if (transcript) {
-            await ask(transcript);
-          } else {
-            setError("Could not transcribe audio.");
-            setStatus("error");
-          }
-        } catch (err) {
-          setError(`Transcription error: ${String(err instanceof Error ? err.message : err)}`);
+        const { data, error } = await getSupabase().functions.invoke("voice-transcribe", {
+          body: blob,
+          headers: { "Content-Type": mime },
+        });
+        const transcript = (data as { transcript?: string } | null)?.transcript?.trim();
+        if (error || !transcript) {
+          setError(error?.message || "Couldn't transcribe that — try again.");
           setStatus("error");
+          return;
         }
+        await ask(transcript);
       };
       recorder.start();
       recorderRef.current = recorder;
       setRecording(true);
-    } catch (err) {
-      setError(`Microphone error: ${String(err instanceof Error ? err.message : err)}`);
+    } catch {
+      setError("Microphone unavailable — check browser permissions.");
       setStatus("error");
     }
   }
 
-  function stopRecording() {
-    recorderRef.current?.stop();
-    setRecording(false);
+  function toggleMic() {
+    if (recording) {
+      recorderRef.current?.stop();
+      setRecording(false);
+    } else {
+      startRecording();
+    }
   }
 
-  function toggleMic() {
-    if (recording) stopRecording();
-    else startRecording();
-  }
+  if (!active) return <NoCluster />;
 
   return (
     <div className="mx-auto max-w-3xl px-5 py-9 pb-24 sm:px-8 md:pb-12">
@@ -113,12 +117,11 @@ export default function QueryPage() {
           Ask the <span className="italic text-brand">mesh.</span>
         </h1>
         <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-ink-soft">
-          One question, everyone&apos;s work. Answers come back synthesized, cited, and attributed
-          to whoever surfaced each idea.
+          One question, everyone&apos;s work. Answers come back synthesized and cited to the
+          teammate who surfaced each idea.
         </p>
       </header>
 
-      {/* Input */}
       <div className="card fade-up mt-7 p-2" style={{ animationDelay: "60ms" }}>
         <div className="flex items-center gap-2">
           <span className="ml-2.5 h-2 w-2 shrink-0 rounded-full" style={{ background: "var(--brand)" }} />
@@ -134,24 +137,16 @@ export default function QueryPage() {
             title="Push to talk"
             className={`grid h-10 w-10 shrink-0 place-items-center rounded-[10px] transition ${
               recording
-                ? "rec-pulse bg-[var(--edge-contradicts)] text-[#0b0e1a]"
+                ? "bg-[var(--edge-contradicts)] text-[#0b0e1a]"
                 : "bg-surface-2 text-ink-soft hover:text-ink"
             }`}
           >
-            {recording ? (
-              <span className="flex h-5 items-end gap-[3px]">
-                <span className="eq-bar" style={{ animationDelay: "0ms" }} />
-                <span className="eq-bar" style={{ animationDelay: "150ms" }} />
-                <span className="eq-bar" style={{ animationDelay: "300ms" }} />
-              </span>
-            ) : (
-              <IconMic width={18} height={18} />
-            )}
+            <IconMic width={18} height={18} />
           </button>
           <button
             onClick={() => ask()}
-            disabled={status === "thinking"}
-            className="btn-grad grid h-10 w-10 shrink-0 place-items-center disabled:opacity-50"
+            disabled={status === "thinking" || !query.trim()}
+            className="btn-grad grid h-10 w-10 shrink-0 place-items-center disabled:opacity-40"
           >
             <IconSend width={18} height={18} />
           </button>
@@ -160,17 +155,16 @@ export default function QueryPage() {
 
       {recording && (
         <p className="fade-up mt-2.5 flex items-center gap-2 px-1 eyebrow">
-          <span className="rec-pulse h-2 w-2 rounded-full bg-[var(--edge-contradicts)]" />
+          <span className="signal-dot" />
           Listening… tap the mic again to transcribe and ask
         </p>
       )}
 
-      {/* Suggested */}
       {status === "idle" && !recording && (
         <div className="fade-up mt-6" style={{ animationDelay: "120ms" }}>
           <p className="eyebrow mb-3">Try asking</p>
           <div className="flex flex-col gap-2">
-            {SUGGESTED_QUERIES.map((q) => (
+            {SUGGESTED.map((q) => (
               <button
                 key={q}
                 onClick={() => ask(q)}
@@ -184,12 +178,11 @@ export default function QueryPage() {
         </div>
       )}
 
-      {/* Thinking */}
       {status === "thinking" && (
         <div className="card fade-up mt-6 p-6">
           <p className="eyebrow mb-4 flex items-center gap-2">
             <span className="signal-dot" />
-            Synthesizing across the team&apos;s graph…
+            Synthesizing across the team graph
           </p>
           <div className="flex flex-col gap-3">
             <div className="shimmer h-3 w-full rounded-full" />
@@ -199,115 +192,63 @@ export default function QueryPage() {
         </div>
       )}
 
-      {/* Error */}
       {status === "error" && (
-        <div className="card fade-up mt-5 border border-[var(--edge-contradicts)]/40 p-5">
-          <p className="text-sm font-semibold text-ink">Something went wrong</p>
-          <p className="mt-1 text-xs text-ink-soft">{error}</p>
+        <div className="card fade-up mt-6 p-6">
+          <p className="eyebrow mb-2 text-[var(--edge-contradicts)]">Couldn&apos;t answer</p>
+          <p className="text-[14px] text-ink-soft">{error}</p>
+          <button onClick={() => ask()} className="eyebrow mt-4 text-brand hover:text-ink">
+            try again
+          </button>
         </div>
       )}
 
-      {/* Answer */}
       {status === "answered" && result && <Answer result={result} />}
     </div>
   );
 }
 
 function Answer({ result }: { result: QueryResult }) {
-  const { subNodes, subLinks, highlight, citations, contributors } = useMemo(() => {
+  const { subNodes, subLinks, highlight } = useMemo(() => {
     const subNodes: GraphNode[] = result.subgraph.nodes.map((n) => ({
       id: n.id,
-      label: n.label || n.concept || n.id,
+      label: n.concept || n.label || "node",
       app: n.app || "",
       teammate: n.teammate || "",
       colorKey: n.teammate || n.id,
     }));
-    const subLinks: GraphLink[] = result.subgraph.edges
-      .map((e) => ({
-        source: e.source ?? e.source_node_id ?? "",
-        target: e.target ?? e.target_node_id ?? "",
-        type: e.type,
-      }))
-      .filter((l) => l.source && l.target);
-    const highlight = new Set(subNodes.map((n) => n.id));
-
-    const citations = result.subgraph.nodes.map((n) => ({
-      id: n.id,
-      concept: n.label || n.concept || "Concept",
-      teammate: n.teammate || "Unknown",
-      app: n.app || "",
-      topic: n.topic || "",
+    const subLinks: GraphLink[] = result.subgraph.edges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      type: e.type,
     }));
-
-    const counts = new Map<string, number>();
-    for (const c of citations) counts.set(c.teammate, (counts.get(c.teammate) ?? 0) + 1);
-    const contributors = [...counts.entries()].map(([name, count]) => ({ name, count }));
-
-    return { subNodes, subLinks, highlight, citations, contributors };
+    return { subNodes, subLinks, highlight: new Set(subNodes.map((n) => n.id)) };
   }, [result]);
-
-  const hasNodes = subNodes.length > 0;
 
   return (
     <div className="fade-up mt-7 flex flex-col gap-6">
-      {/* Synthesized answer — the mesh "speaks", set in the serif */}
       <div className="card p-6 sm:p-7">
         <p className="eyebrow mb-4">Synthesized answer</p>
-        <p className="whitespace-pre-wrap font-display text-[1.2rem] leading-relaxed text-ink">
-          {result.answer}
-        </p>
-
-        {/* attribution — who this came from */}
-        {contributors.length > 0 && (
-          <div className="mt-6 flex flex-wrap items-center gap-x-5 gap-y-3 border-t border-line pt-5">
-            <span className="eyebrow">drawn from</span>
-            {contributors.map(({ name, count }) => (
-              <div key={name} className="flex items-center gap-2.5">
-                <span
-                  className="grid h-8 w-8 place-items-center rounded-full text-[10px] font-semibold text-white"
-                  style={{ background: colorForKey(name) }}
-                >
-                  {initialsFor(name)}
-                </span>
-                <div className="leading-tight">
-                  <p className="text-[13px] font-medium">{name}</p>
-                  <p className="eyebrow mt-0.5">
-                    {count} {count === 1 ? "concept" : "concepts"}
-                  </p>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
+        <p className="font-display text-[1.2rem] leading-relaxed text-ink">{renderAnswer(result.answer)}</p>
       </div>
 
-      {hasNodes && (
+      {subNodes.length > 0 && (
         <div className="grid gap-6 lg:grid-cols-2">
-          {/* Citations */}
+          {/* Sources */}
           <div className="card p-6">
-            <p className="eyebrow mb-4">Citations</p>
+            <p className="eyebrow mb-4">Sources · {subNodes.length}</p>
             <div className="flex flex-col gap-2.5">
-              {citations.map((c, i) => (
-                <div key={c.id} className="flex gap-3 rounded-[10px] border border-line p-3">
+              {subNodes.map((n) => (
+                <div key={n.id} className="flex gap-3 rounded-[10px] border border-line p-3">
                   <span
-                    className="tnum grid h-6 w-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold"
-                    style={{
-                      background: "color-mix(in srgb, var(--signal) 16%, transparent)",
-                      color: "var(--signal)",
-                    }}
-                  >
-                    {i + 1}
-                  </span>
+                    className="mt-0.5 h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ background: accentForUser(n.colorKey) }}
+                  />
                   <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="truncate text-[14px] font-medium">{c.concept}</p>
-                      <span className="flex shrink-0 items-center gap-1.5 eyebrow">
-                        <span className="h-2 w-2 rounded-full" style={{ background: colorForKey(c.teammate) }} />
-                        {c.teammate.split(" ")[0]}
-                      </span>
-                    </div>
-                    {c.topic && <p className="mt-1 text-[12.5px] text-ink-soft">{c.topic}</p>}
-                    <p className="eyebrow mt-1.5">via {c.app}</p>
+                    <p className="truncate text-[14px] font-medium">{n.label}</p>
+                    <p className="eyebrow mt-1">
+                      {n.teammate || "teammate"}
+                      {n.app ? ` · ${n.app}` : ""}
+                    </p>
                   </div>
                 </div>
               ))}
@@ -323,8 +264,8 @@ function Answer({ result }: { result: QueryResult }) {
             <div
               className="h-[260px] w-full overflow-hidden rounded-[10px] border border-line"
               style={{
-                backgroundImage:
-                  "radial-gradient(circle, rgba(142,123,240,0.10) 1px, transparent 1px)",
+                background: "var(--bg)",
+                backgroundImage: "radial-gradient(circle, rgba(142,123,240,0.10) 1px, transparent 1px)",
                 backgroundSize: "22px 22px",
               }}
             >
@@ -341,6 +282,18 @@ function Answer({ result }: { result: QueryResult }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function NoCluster() {
+  return (
+    <div className="mx-auto max-w-3xl px-5 py-16 sm:px-8">
+      <div className="card p-7 text-center">
+        <p className="eyebrow">No cluster</p>
+        <h2 className="font-display mt-2 text-2xl">Join a workspace to ask the mesh</h2>
+        <p className="mt-2 text-[13px] text-ink-soft">Redeem an invite link to get started.</p>
+      </div>
     </div>
   );
 }

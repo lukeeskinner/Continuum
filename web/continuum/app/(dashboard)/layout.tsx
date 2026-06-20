@@ -1,18 +1,16 @@
-import AppShell from "@/components/AppShell";
-import ClusterProvider from "@/components/ClusterProvider";
+import { AuthProvider } from "@/components/auth";
+import DashboardGate from "@/components/DashboardGate";
 
-// Layout for the authenticated dashboard surface. ClusterProvider gates on the
-// Supabase session and supplies real cluster/member context to the shell + every
-// page. Standalone routes like /login, /onboard, and /join live outside this
-// group so they render without the app chrome (or auth gate).
+// Authenticated dashboard surface. The gate handles session/login; standalone
+// routes like /onboard live outside this group so they render without chrome.
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
   return (
-    <ClusterProvider>
-      <AppShell>{children}</AppShell>
-    </ClusterProvider>
+    <AuthProvider>
+      <DashboardGate>{children}</DashboardGate>
+    </AuthProvider>
   );
 }

@@ -1,133 +1,157 @@
 "use client";
 
-// Manager dashboard: invite teammates (real user-invite Edge Function via the
-// InviteModal), the per-cluster privacy policy (local defaults until backend
-// wiring lands), and member roles read from cluster_members.
-import { useState } from "react";
-import { useCluster } from "@/components/ClusterProvider";
-import { initialsFor } from "@/lib/colors";
-import InviteModal from "@/components/InviteModal";
-import { PRIVACY_POLICIES, type PrivacyPolicy } from "@/lib/mock";
-import { IconPlus } from "@/components/icons";
+// Manager dashboard: cluster roster + invites. Invites are created through the
+// `user-invite` Edge Function (admin-only, enforced server-side + by RLS);
+// members/roles are read live from cluster_members + profiles.
+import { useEffect, useState } from "react";
+import { useCluster } from "@/components/cluster";
+import { fetchInvites } from "@/lib/queries";
+import { getSupabase } from "@/lib/supabase/client";
+import { accentForUser, displayName, initials } from "@/lib/ui";
+import type { InviteRow } from "@/types/db";
 
-function Toggle({ on, onClick, disabled }: { on: boolean; onClick: () => void; disabled?: boolean }) {
-  return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      role="switch"
-      aria-checked={on}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
-        on ? "" : "bg-surface-2"
-      }`}
-      style={on ? { background: "linear-gradient(90deg, var(--mint), var(--sky))" } : undefined}
-    >
-      <span
-        className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-all ${
-          on ? "left-[22px]" : "left-0.5"
-        }`}
-      />
-    </button>
-  );
-}
+const STATUS_COLOR: Record<InviteRow["status"], string> = {
+  pending: "var(--peach)",
+  accepted: "var(--mint)",
+  revoked: "var(--ink-faint)",
+};
 
 export default function ManagePage() {
-  const { activeCluster, activeClusterId, role, members, colorFor } = useCluster();
-  const isAdmin = role === "admin";
-  const [policies, setPolicies] = useState<PrivacyPolicy[]>(PRIVACY_POLICIES);
-  const [inviteOpen, setInviteOpen] = useState(false);
+  const { active, members } = useCluster();
+  const isAdmin = active?.role === "admin";
 
-  const togglePolicy = (id: string) =>
-    setPolicies((p) => p.map((x) => (x.id === id ? { ...x, enabled: !x.enabled } : x)));
+  const [invites, setInvites] = useState<InviteRow[]>([]);
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!active) return;
+    fetchInvites(active.id)
+      .then(setInvites)
+      .catch(() => setInvites([]));
+  }, [active]);
+
+  async function sendInvite() {
+    if (!email.trim() || !active) return;
+    setBusy(true);
+    setNotice(null);
+    const { error } = await getSupabase().functions.invoke("user-invite", {
+      body: { email: email.trim(), cluster_id: active.id },
+    });
+    setBusy(false);
+    if (error) {
+      setNotice(error.message || "Couldn't send invite.");
+      return;
+    }
+    setEmail("");
+    setNotice(`Invited ${email.trim()}.`);
+    fetchInvites(active.id).then(setInvites).catch(() => {});
+  }
+
+  function copyLink(token: string) {
+    const url = `${window.location.origin}/onboard?token=${token}`;
+    navigator.clipboard?.writeText(url).catch(() => {});
+    setCopied(token);
+    setTimeout(() => setCopied(null), 1600);
+  }
+
+  if (!active) {
+    return (
+      <div className="mx-auto max-w-3xl px-5 py-16 sm:px-8">
+        <div className="card p-7 text-center">
+          <p className="eyebrow">No cluster</p>
+          <h2 className="font-display mt-2 text-2xl">Nothing to manage yet</h2>
+          <p className="mt-2 text-[13px] text-ink-soft">Join a workspace to manage members and invites.</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="mx-auto flex max-w-6xl flex-col gap-6 px-5 py-8 pb-24 sm:px-8 md:pb-12">
+    <div className="mx-auto flex max-w-5xl flex-col gap-6 px-5 py-8 pb-24 sm:px-8 md:pb-12">
       <header className="fade-up">
-        <p className="eyebrow">{isAdmin ? "manager controls" : "cluster settings"}</p>
+        <p className="eyebrow">Manager controls</p>
         <h1 className="font-display mt-3 text-[2.2rem] leading-tight sm:text-4xl">
-          Manage <span className="italic text-brand">{activeCluster.name}</span>
+          Manage <span className="italic text-brand">{active.name}</span>
         </h1>
-        <p className="mt-3 max-w-xl text-[14px] text-ink-soft">
-          Invite teammates, review the privacy policy, and see who&apos;s in your cluster.
+        <p className="mt-3 text-[14px] text-ink-soft">
+          {isAdmin
+            ? "Invite teammates and review who's in the workspace."
+            : "Review who's in the workspace. Inviting requires an admin role."}
         </p>
       </header>
 
-      {/* Invite + privacy policy */}
-      <section className="grid gap-6 lg:grid-cols-3">
-        <div className="card fade-up p-6">
+      <div className="grid gap-6 lg:grid-cols-2">
+        {/* Invites */}
+        <section className="card fade-up p-6">
           <p className="eyebrow mb-4">Invite teammates</p>
           {isAdmin ? (
-            <>
-              <p className="text-[13px] text-ink-soft">
-                Send an invite by email — they&apos;ll get a secure link to join this cluster.
-              </p>
-              <button
-                onClick={() => setInviteOpen(true)}
-                className="btn-grad mt-4 flex w-full items-center justify-center gap-1.5 py-2.5 text-[13px] font-semibold"
-              >
-                <IconPlus width={15} height={15} /> Invite by email
+            <div className="flex gap-2">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && sendInvite()}
+                placeholder="teammate@team.com"
+                className="min-w-0 flex-1 rounded-[10px] border border-line bg-surface-2 px-3.5 py-2.5 text-[14px] outline-none transition focus:border-brand"
+              />
+              <button onClick={sendInvite} disabled={busy || !email.trim()} className="btn-grad shrink-0 px-4 text-[13px] disabled:opacity-40">
+                {busy ? "Sending…" : "Invite"}
               </button>
-            </>
+            </div>
           ) : (
-            <p className="text-[13px] text-ink-soft">
-              Only cluster admins can invite new teammates. Ask an admin if you need to add someone.
-            </p>
+            <p className="text-[13px] text-ink-faint">Only admins can invite new members.</p>
           )}
-        </div>
+          {notice && <p className="mt-2.5 text-[12.5px] text-ink-soft">{notice}</p>}
 
-        {/* Privacy policy */}
-        <section className="card fade-up p-6 lg:col-span-2" style={{ animationDelay: "90ms" }}>
-          <p className="eyebrow">Privacy policy</p>
-          <p className="mb-4 mt-1.5 text-[13px] text-ink-soft">
-            What every member&apos;s on-device agent is allowed to share with the mesh.
-          </p>
-          <ul className="flex flex-col">
-            {policies.map((p) => (
-              <li
-                key={p.id}
-                className="flex items-center gap-3 border-b border-line/60 py-3.5 last:border-0"
-              >
+          <div className="mt-5 flex flex-col gap-2">
+            {invites.length === 0 && (
+              <p className="text-[12.5px] text-ink-faint">No invites yet.</p>
+            )}
+            {invites.map((inv) => (
+              <div key={inv.id} className="flex items-center gap-3 rounded-[10px] border border-line p-3">
+                <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: STATUS_COLOR[inv.status] }} />
                 <div className="min-w-0 flex-1">
-                  <p className="text-[14px] font-medium">{p.label}</p>
-                  <p className="mt-0.5 text-[12.5px] text-ink-faint">{p.description}</p>
+                  <p className="truncate text-[13.5px]">{inv.email}</p>
+                  <p className="eyebrow mt-0.5">{inv.status}</p>
                 </div>
-                <Toggle on={p.enabled} onClick={() => togglePolicy(p.id)} disabled={!isAdmin} />
-              </li>
+                {inv.status === "pending" && (
+                  <button onClick={() => copyLink(inv.token)} className="eyebrow text-brand hover:text-ink">
+                    {copied === inv.token ? "copied" : "copy link"}
+                  </button>
+                )}
+              </div>
             ))}
-          </ul>
+          </div>
         </section>
-      </section>
 
-      {/* Members + roles */}
-      <section className="card fade-up p-6" style={{ animationDelay: "120ms" }}>
-        <p className="eyebrow mb-4">Members · {members.length}</p>
-        {members.length === 0 ? (
-          <p className="text-[13px] text-ink-faint">Loading members…</p>
-        ) : (
+        {/* Members */}
+        <section className="card fade-up p-6" style={{ animationDelay: "60ms" }}>
+          <p className="eyebrow mb-4">Members · {members.length}</p>
           <ul className="flex flex-col gap-2">
+            {members.length === 0 && <p className="text-[12.5px] text-ink-faint">No members loaded.</p>}
             {members.map((m) => {
-              const name = m.full_name || m.email;
+              const name = displayName(m.profiles);
               return (
-                <li
-                  key={m.id}
-                  className="flex flex-wrap items-center gap-3 rounded-[10px] border border-line p-3"
-                >
+                <li key={m.user_id} className="flex items-center gap-3 rounded-[10px] border border-line p-3">
                   <span
-                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
-                    style={{ background: colorFor(m.id) }}
+                    className="grid h-9 w-9 shrink-0 place-items-center rounded-full text-[11px] font-semibold text-[#0b0e1a]"
+                    style={{ background: accentForUser(m.user_id) }}
                   >
-                    {initialsFor(name)}
+                    {initials(name)}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[14px] font-medium">{name}</p>
-                    <p className="truncate text-[11px] text-ink-faint">{m.email}</p>
+                    <p className="truncate text-[11px] text-ink-faint">{m.profiles?.email}</p>
                   </div>
                   <span
-                    className={`rounded-md px-2.5 py-1 text-[11px] font-medium capitalize ${
-                      m.role === "admin"
-                        ? "bg-lavender/15 text-ink ring-1 ring-lavender/30"
-                        : "bg-surface-2 text-ink-soft"
-                    }`}
+                    className="chip"
+                    style={{
+                      background: "color-mix(in srgb, var(--brand) 14%, transparent)",
+                      color: m.role === "admin" ? "var(--brand)" : "var(--ink-soft)",
+                    }}
                   >
                     {m.role}
                   </span>
@@ -135,12 +159,8 @@ export default function ManagePage() {
               );
             })}
           </ul>
-        )}
-      </section>
-
-      {inviteOpen && (
-        <InviteModal clusterId={activeClusterId} onClose={() => setInviteOpen(false)} />
-      )}
+        </section>
+      </div>
     </div>
   );
 }
