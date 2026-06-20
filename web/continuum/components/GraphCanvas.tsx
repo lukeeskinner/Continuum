@@ -144,17 +144,28 @@ export default function GraphCanvas({ nodes, links, onNodeClick, highlightIds }:
       .selectAll<SVGLineElement, SimLink>("line")
       .data(simLinks, (d) => `${d.source.id}->${d.target.id}`);
     linkSel.exit().transition().duration(250).attr("stroke-opacity", 0).remove();
+    // New edges flash in "signal" amber (a connection forming), then settle
+    // to their relationship-type colour.
     const linkEnter = linkSel
       .enter()
       .append("line")
-      .attr("stroke", (d) => EDGE_META[d.type].color)
-      .attr("stroke-width", (d) => (d.type === "CONTRADICTS" ? 2.4 : 1.8))
+      .attr("stroke", "#f2a93c")
+      .attr("stroke-width", 3.4)
       .attr("stroke-linecap", "round")
       .attr("stroke-dasharray", (d) => (d.type === "CONTRADICTS" ? "1 6" : null))
       .attr("stroke-opacity", 0);
-    linkEnter.transition().duration(600).attr("stroke-opacity", 0.55);
+    linkEnter
+      .transition()
+      .duration(200)
+      .attr("stroke-opacity", 0.95)
+      .transition()
+      .duration(950)
+      .attr("stroke", (d) => EDGE_META[d.type].color)
+      .attr("stroke-width", (d) => (d.type === "CONTRADICTS" ? 2.1 : 1.5))
+      .attr("stroke-opacity", 0.5);
     const allLinks = linkEnter.merge(linkSel);
-    allLinks.attr("stroke", (d) => EDGE_META[d.type].color);
+    // Refresh colour only on already-present edges (don't clobber the flash).
+    linkSel.attr("stroke", (d) => EDGE_META[d.type].color);
 
     // --- NODES join ---
     const nodeSel = svg
@@ -195,18 +206,18 @@ export default function GraphCanvas({ nodes, links, onNodeClick, highlightIds }:
       .append("circle")
       .attr("class", "core")
       .attr("fill", (d) => accentFor(d.teammate))
-      .attr("stroke", "#ffffff")
+      .attr("stroke", "#0b0e1a")
       .attr("stroke-width", 2.5);
     // label
     nodeEnter
       .append("text")
       .attr("class", "label")
       .attr("text-anchor", "middle")
-      .attr("fill", "#54506b")
+      .attr("fill", "#9b9dbd")
       .attr("font-size", 10.5)
-      .attr("font-weight", 600)
+      .attr("font-weight", 500)
       .attr("paint-order", "stroke")
-      .attr("stroke", "#fbf8ff")
+      .attr("stroke", "#0b0e1a")
       .attr("stroke-width", 3)
       .text((d) => (d.label.length > 22 ? d.label.slice(0, 21) + "…" : d.label));
 

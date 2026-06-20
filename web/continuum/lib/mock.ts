@@ -13,12 +13,12 @@ export type AccentKey =
   | "lemon";
 
 export const ACCENTS: Record<AccentKey, string> = {
-  lavender: "#9d7bff",
-  pink: "#ff7eb6",
-  sky: "#59c2ff",
-  mint: "#34d6b0",
-  peach: "#ffae6b",
-  lemon: "#f5c518",
+  lavender: "#8e7bf0", // iris (brand)
+  pink: "#e0609b",     // rose
+  sky: "#4f9bf0",      // azure
+  mint: "#2fc4b2",     // teal (presence)
+  peach: "#f2a93c",    // amber (signal)
+  lemon: "#f26d5b",    // coral
 };
 
 export type Role = "Manager" | "Member" | "Viewer";
@@ -237,17 +237,17 @@ export const EDGE_META: Record<
 > = {
   RELATED_TO: {
     label: "Related to",
-    color: "#59c2ff",
+    color: "#4f9bf0",
     description: "Topically adjacent work across teammates",
   },
   BUILDS_ON: {
     label: "Builds on",
-    color: "#34d6b0",
+    color: "#2fc4b2",
     description: "One concept extends or implements another",
   },
   CONTRADICTS: {
     label: "Contradicts",
-    color: "#ff6b9d",
+    color: "#f26d5b",
     description: "Conflicting findings worth reconciling",
   },
 };
