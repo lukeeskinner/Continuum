@@ -84,25 +84,51 @@ $$;
 -- ---------------------------------------------------------------------------
 -- Scheduled connection detection (every 5 minutes).
 --
--- Requires pg_cron + pg_net (available on Supabase). The cron job invokes the
--- `connection-detect` Edge Function. Replace <PROJECT_REF> and the bearer
--- secret before enabling in production; left commented so the migration is
--- safe to run on local stacks that lack these extensions.
--- ---------------------------------------------------------------------------
--- CREATE EXTENSION IF NOT EXISTS pg_cron;
--- CREATE EXTENSION IF NOT EXISTS pg_net;
+-- The job invokes the `connection-detect` Edge Function via pg_net. Both the
+-- function base URL and the cron bearer secret are read from Supabase Vault at
+-- run time, so nothing environment-specific is hardcoded here. Before this job
+-- can fire, store the two secrets once per project:
 --
--- SELECT cron.schedule(
---   'continuum-connection-detect',
---   '*/5 * * * *',
---   $$
---   SELECT net.http_post(
---     url := 'https://<PROJECT_REF>.supabase.co/functions/v1/connection-detect',
---     headers := jsonb_build_object(
---       'Content-Type', 'application/json',
---       'Authorization', 'Bearer ' || current_setting('app.cron_secret', true)
---     ),
---     body := '{}'::jsonb
---   );
---   $$
--- );
+--   select vault.create_secret(
+--     'https://<PROJECT_REF>.supabase.co/functions/v1', 'continuum_functions_url');
+--   select vault.create_secret('<CRON_SECRET>', 'continuum_cron_secret');
+--
+-- The block below is guarded: it only runs where pg_cron + pg_net are
+-- available (Supabase, and the supabase/postgres local image), and is a no-op
+-- on vanilla Postgres so the migration stays portable.
+-- ---------------------------------------------------------------------------
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_cron')
+     AND EXISTS (SELECT 1 FROM pg_available_extensions WHERE name = 'pg_net') THEN
+
+    CREATE EXTENSION IF NOT EXISTS pg_cron;
+    CREATE EXTENSION IF NOT EXISTS pg_net;
+
+    -- Make this migration idempotent: drop a prior job before rescheduling.
+    IF EXISTS (SELECT 1 FROM cron.job WHERE jobname = 'continuum-connection-detect') THEN
+      PERFORM cron.unschedule('continuum-connection-detect');
+    END IF;
+
+    PERFORM cron.schedule(
+      'continuum-connection-detect',
+      '*/5 * * * *',
+      $job$
+      SELECT net.http_post(
+        url := (
+          SELECT decrypted_secret FROM vault.decrypted_secrets
+          WHERE name = 'continuum_functions_url'
+        ) || '/connection-detect',
+        headers := jsonb_build_object(
+          'Content-Type', 'application/json',
+          'Authorization', 'Bearer ' || (
+            SELECT decrypted_secret FROM vault.decrypted_secrets
+            WHERE name = 'continuum_cron_secret'
+          )
+        ),
+        body := '{}'::jsonb
+      );
+      $job$
+    );
+  END IF;
+END $$;

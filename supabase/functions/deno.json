@@ -5,5 +5,9 @@
   },
   "fmt": {
     "lineWidth": 100
+  },
+  "tasks": {
+    "test": "deno test --allow-net _shared/",
+    "check": "deno check **/index.ts"
   }
 }

@@ -9,7 +9,7 @@
 const Redis = require("ioredis");
 
 const DIM = 1536;
-const CLUSTER_ID = "test-cluster";
+const CLUSTER_ID = "test_cluster";
 
 function randomVector() {
   return Array.from({ length: DIM }, () => Math.random());
