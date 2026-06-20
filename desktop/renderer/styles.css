@@ -1,0 +1,99 @@
+:root {
+  --blocked: #ef4444;
+  --local: #f59e0b;
+  --shared: #22c55e;
+}
+
+* {
+  margin: 0;
+  box-sizing: border-box;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+body {
+  background: transparent;
+  color: #e5e7eb;
+  user-select: none;
+  -webkit-app-region: drag;
+}
+
+.panel {
+  height: 100vh;
+  margin: 8px;
+  padding: 16px;
+  border-radius: 18px;
+  background: rgba(20, 20, 28, 0.55);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.panel__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panel__header h1 {
+  font-size: 14px;
+  font-weight: 600;
+  flex: 1;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--shared);
+  box-shadow: 0 0 8px var(--shared);
+}
+
+.toggle {
+  -webkit-app-region: no-drag;
+  background: rgba(255, 255, 255, 0.1);
+  color: #e5e7eb;
+  border: none;
+  border-radius: 8px;
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.state__decision {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9ca3af;
+}
+
+.state__concept {
+  font-size: 14px;
+  margin-top: 4px;
+}
+
+.log h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #6b7280;
+  margin-bottom: 8px;
+}
+
+.log ul {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow-y: auto;
+}
+
+.log li {
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Continuum Agent</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <div class="panel">
+      <header class="panel__header">
+        <span class="dot" id="status-dot"></span>
+        <h1>Continuum</h1>
+        <button id="toggle" class="toggle">Pause</button>
+      </header>
+
+      <section class="state">
+        <p class="state__decision" id="decision">Idle</p>
+        <p class="state__concept" id="concept">Waiting for activity…</p>
+      </section>
+
+      <section class="log">
+        <h2>Recent observations</h2>
+        <ul id="log-list"></ul>
+      </section>
+    </div>
+    <script src="renderer.js"></script>
+  </body>
+</html>
