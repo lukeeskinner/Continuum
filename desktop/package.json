@@ -6,9 +6,44 @@
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
-    "sidecar:setup": "python3 -m venv sidecar/.venv && sidecar/.venv/bin/pip install -r sidecar/requirements.txt"
+    "test": "node --test electron/*.test.js",
+    "sidecar:setup": "python3 -m venv sidecar/.venv && sidecar/.venv/bin/pip install -r sidecar/requirements.txt",
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.4"
   },
   "devDependencies": {
-    "electron": "32.2.7"
+    "electron": "32.2.7",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "app.continuum.desktop",
+    "productName": "Continuum",
+    "files": [
+      "electron/**/*",
+      "!electron/**/*.test.js",
+      "renderer/**/*",
+      "assets/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "sidecar",
+        "to": "sidecar",
+        "filter": ["**/*", "!.venv/**"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
   }
 }

@@ -47,6 +47,9 @@ verify_jwt = false
 [functions.connection-detect]
 verify_jwt = false
 
+[functions.browserbase-enrich]
+verify_jwt = false
+
 [functions.query-synthesize]
 verify_jwt = true
 

@@ -25,5 +25,13 @@ export const ENV = {
   RESEND_API_KEY: () => optionalEnv("RESEND_API_KEY"),
   CRON_SECRET: () => requireEnv("CRON_SECRET"),
   AGENT_SYNC_SECRET: () => requireEnv("AGENT_SYNC_SECRET"),
+  // Browserbase enrichment is optional; the function falls back to a direct
+  // fetch when these are unset.
+  BROWSERBASE_API_KEY: () => optionalEnv("BROWSERBASE_API_KEY"),
+  BROWSERBASE_PROJECT_ID: () => optionalEnv("BROWSERBASE_PROJECT_ID"),
   APP_URL: () => optionalEnv("APP_URL", "http://localhost:3000"),
+  // Arize Phoenix OTLP/HTTP endpoint (e.g. https://app.phoenix.arize.com).
+  // Tracing is a no-op when this is unset.
+  PHOENIX_OTLP_ENDPOINT: () => optionalEnv("PHOENIX_OTLP_ENDPOINT"),
+  PHOENIX_API_KEY: () => optionalEnv("PHOENIX_API_KEY"),
 } as const;

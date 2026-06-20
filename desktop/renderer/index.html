@@ -3,6 +3,10 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+    />
     <title>Continuum Agent</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
@@ -12,6 +16,7 @@
         <span class="dot" id="status-dot"></span>
         <h1>Continuum</h1>
         <button id="toggle" class="toggle">Pause</button>
+        <button id="signout" class="toggle">Sign out</button>
       </header>
 
       <section class="state">
