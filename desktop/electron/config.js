@@ -27,6 +27,17 @@ module.exports = {
     .map((d) => d.trim().toLowerCase())
     .filter(Boolean),
 
+  // Sentry error monitoring (optional). Disabled when SENTRY_DSN is unset.
+  sentryDsn: process.env.SENTRY_DSN || "",
+  sentryEnvironment: process.env.SENTRY_ENVIRONMENT || "development",
+
+  // Orkes Conductor workflow orchestration (optional). When configured, each
+  // SHARED_ANON observation is ingested via a durable Conductor workflow that
+  // orchestrates the agent-sync call; otherwise it posts to agent-sync directly.
+  orkesServerUrl: process.env.ORKES_SERVER_URL || "",
+  orkesKeyId: process.env.ORKES_KEY_ID || "",
+  orkesKeySecret: process.env.ORKES_KEY_SECRET || "",
+
   // Capture tuning.
   captureIntervalMs: Number(process.env.CAPTURE_INTERVAL_MS || 4000),
   // Mean per-pixel delta (0-255) above which a frame is considered "changed".
