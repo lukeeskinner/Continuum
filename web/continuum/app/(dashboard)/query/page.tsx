@@ -16,7 +16,7 @@ import { EDGE_META, accentForUser, displayName } from "@/lib/ui";
 import type { GraphLink, GraphNode, QueryResult } from "@/types/graph";
 import { IconSend, IconMic } from "@/components/icons";
 
-type Status = "idle" | "thinking" | "done";
+type Status = "idle" | "thinking" | "done" | "error";
 
 interface ResearchFinding {
   title: string;
