@@ -7,6 +7,8 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.join(__dirname),
   },
+  // Keep the headless-browser driver external to the server bundle.
+  serverExternalPackages: ["playwright-core"],
 };
 
 export default nextConfig;

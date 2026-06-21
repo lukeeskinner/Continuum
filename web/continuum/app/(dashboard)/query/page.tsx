@@ -1,26 +1,53 @@
 "use client";
 
-// Ask-the-mesh. Posts to the `query-synthesize` Edge Function (which the
-// browser client authorizes with the current session JWT), then renders the
-// citation-aware answer + the contributing subgraph it returns.
+// Ask-the-mesh. First recalls from the team graph (query-synthesize). Then, if
+// the question looks like a bug OR the graph came back thin, it auto-fires the
+// web-research agent (/api/research → Browserbase) and folds in what it finds —
+// also adding those findings to the mesh as Browser nodes.
 import { useMemo, useState } from "react";
 import GraphCanvas from "@/components/GraphCanvas";
 import { useCluster } from "@/components/cluster";
-import { getSupabase } from "@/lib/supabase/client";
-import { EDGE_META, accentForUser } from "@/lib/ui";
+import { getSupabase, getAccessToken } from "@/lib/supabase/client";
+import { searchNodes } from "@/lib/queries";
+import { EDGE_META, accentForUser, displayName } from "@/lib/ui";
 import type { GraphLink, GraphNode, QueryResult } from "@/types/graph";
 import { IconSend } from "@/components/icons";
 
-type Status = "idle" | "thinking" | "answered" | "error";
+type Status = "idle" | "thinking" | "done";
+
+interface ResearchFinding {
+  title: string;
+  url: string;
+  snippet: string;
+  node_id: string | null;
+}
+interface ResearchResp {
+  available: boolean;
+  source?: string;
+  answer?: string;
+  findings?: ResearchFinding[];
+  added?: number;
+  error?: string;
+  reason?: string;
+}
 
 const SUGGESTED = [
-  "Who's working on attention numerical stability?",
-  "Has anyone hit this Supabase RLS issue before?",
+  "Why is our softmax overflowing on long sequences?",
+  "Has anyone hit this Supabase RLS recursion error?",
   "What do we know about pgvector index tuning?",
   "Any conflicting findings worth reconciling?",
 ];
 
-// Split prose into plain text + [Name@HH:MM] citation chunks.
+const BUG_RE =
+  /\b(bug|error|exception|traceback|stack ?trace|crash|fails?|failing|broken|undefined|null|segfault|panic|throw|cannot|can'?t|doesn'?t work|not working|why is|503|500|429|timeout)\b/i;
+
+const SOURCE_LABEL: Record<string, string> = {
+  "github-issues": "GitHub issues",
+  "github-repos": "GitHub repos",
+  web: "the web",
+};
+
+// Wrap [..] citation markers as highlights.
 function renderAnswer(text: string) {
   return text.split(/(\[[^\]]+\])/g).map((part, i) =>
     /^\[[^\]]+\]$/.test(part) ? (
@@ -34,11 +61,40 @@ function renderAnswer(text: string) {
 }
 
 export default function QueryPage() {
-  const { active } = useCluster();
+  const { active, members } = useCluster();
+  const nameFor = (uid: string) => {
+    const m = members.find((x) => x.user_id === uid);
+    return m ? displayName(m.profiles) : "teammate";
+  };
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [result, setResult] = useState<QueryResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [internalError, setInternalError] = useState<string | null>(null);
+  const [research, setResearch] = useState<ResearchResp | null>(null);
+  const [researching, setResearching] = useState(false);
+
+  async function runResearch(text: string) {
+    if (!active) return;
+    setResearching(true);
+    setResearch(null);
+    try {
+      const token = await getAccessToken();
+      const res = await fetch("/api/research", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ query: text, cluster_id: active.id }),
+      });
+      if (res.status === 401) {
+        setResearch({ available: true, error: "Your session expired — sign out and back in, then retry." });
+      } else {
+        setResearch((await res.json()) as ResearchResp);
+      }
+    } catch (e) {
+      setResearch({ available: true, error: String(e), findings: [] });
+    } finally {
+      setResearching(false);
+    }
+  }
 
   async function ask(q?: string) {
     const text = (q ?? query).trim();
@@ -46,17 +102,52 @@ export default function QueryPage() {
     setQuery(text);
     setStatus("thinking");
     setResult(null);
-    setError(null);
+    setInternalError(null);
+    setResearch(null);
+
+    let thin = true;
     const { data, error } = await getSupabase().functions.invoke("query-synthesize", {
       body: { query: text, cluster_id: active.id },
     });
     if (error) {
-      setError(error.message || "Something went wrong synthesizing an answer.");
-      setStatus("error");
-      return;
+      // query-synthesize isn't deployed → in-app keyword recall over the graph.
+      try {
+        const { nodes, edges } = await searchNodes(active.id, text);
+        if (nodes.length > 0) {
+          setResult({
+            answer: `Found ${nodes.length} related ${nodes.length === 1 ? "concept" : "concepts"} across the team.`,
+            subgraph: {
+              nodes: nodes.map((n) => ({ id: n.id, concept: n.concept, app: n.app, teammate: nameFor(n.user_id) })),
+              edges: edges.map((e) => ({ source: e.source_node_id, target: e.target_node_id, type: e.type })),
+            },
+          });
+          thin = nodes.length < 2;
+        } else {
+          setInternalError("no team match");
+        }
+      } catch {
+        setInternalError(error.message || "The team graph is unavailable right now.");
+      }
+    } else {
+      const res = data as QueryResult;
+      setResult(res);
+      thin = (res.subgraph?.nodes?.length ?? 0) < 2;
+      try {
+        const token = await getAccessToken();
+        const estimate = Math.round((text.length + (res.answer?.length ?? 0)) / 4) + 300;
+        fetch("/api/usage", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ tokens: estimate }),
+        }).catch(() => {});
+      } catch {
+        /* best-effort */
+      }
     }
-    setResult(data as QueryResult);
-    setStatus("answered");
+    setStatus("done");
+
+    // Auto-fire web research when it's a bug-like question or the graph is thin.
+    if (BUG_RE.test(text) || thin) await runResearch(text);
   }
 
   if (!active) return <NoCluster />;
@@ -64,13 +155,13 @@ export default function QueryPage() {
   return (
     <div className="mx-auto max-w-3xl px-5 py-9 pb-24 sm:px-8 md:pb-12">
       <header className="fade-up">
-        <p className="eyebrow">Cross-person recall</p>
+        <p className="eyebrow">Cross-person recall · web research</p>
         <h1 className="font-display mt-3 text-[2.4rem] leading-[1.05] sm:text-5xl">
           Ask the <span className="italic text-brand">mesh.</span>
         </h1>
         <p className="mt-4 max-w-xl text-[15px] leading-relaxed text-ink-soft">
-          One question, everyone&apos;s work. Answers come back synthesized and cited to the
-          teammate who surfaced each idea.
+          First it recalls from everyone&apos;s work. If it&apos;s a bug or the team hasn&apos;t
+          seen it, the agent browses the web (GitHub, docs) and folds the findings back in.
         </p>
       </header>
 
@@ -81,7 +172,7 @@ export default function QueryPage() {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && ask()}
-            placeholder="Who's working on attention numerical stability?"
+            placeholder="Why is our softmax overflowing on long sequences?"
             className="min-w-0 flex-1 bg-transparent py-2.5 text-[15px] outline-none placeholder:text-ink-faint"
           />
           <button
@@ -116,7 +207,7 @@ export default function QueryPage() {
         <div className="card fade-up mt-6 p-6">
           <p className="eyebrow mb-4 flex items-center gap-2">
             <span className="signal-dot" />
-            Synthesizing across the team graph
+            Recalling across the team graph
           </p>
           <div className="flex flex-col gap-3">
             <div className="shimmer h-3 w-full rounded-full" />
@@ -126,17 +217,106 @@ export default function QueryPage() {
         </div>
       )}
 
-      {status === "error" && (
-        <div className="card fade-up mt-6 p-6">
-          <p className="eyebrow mb-2 text-[var(--edge-contradicts)]">Couldn&apos;t answer</p>
-          <p className="text-[14px] text-ink-soft">{error}</p>
-          <button onClick={() => ask()} className="eyebrow mt-4 text-brand hover:text-ink">
-            try again
-          </button>
+      {status === "done" && (
+        <div className="mt-7 flex flex-col gap-6">
+          {result ? (
+            <Answer result={result} />
+          ) : (
+            <div className="card fade-up p-6">
+              <p className="eyebrow mb-2">Team graph</p>
+              <p className="text-[14px] text-ink-soft">
+                {internalError ? "Nothing from the team graph — checking the web instead." : "No internal match."}
+              </p>
+            </div>
+          )}
+
+          {/* manual trigger if research didn't auto-run */}
+          {!researching && !research && (
+            <button
+              onClick={() => runResearch(query)}
+              className="card card-hover self-start px-4 py-2.5 text-[13px] font-medium text-ink"
+            >
+              Search the web too →
+            </button>
+          )}
+
+          {researching && (
+            <div className="card fade-up p-6">
+              <p className="eyebrow mb-4 flex items-center gap-2">
+                <span className="signal-dot" /> Browsing the web for this
+              </p>
+              <div className="flex flex-col gap-3">
+                <div className="shimmer h-3 w-full rounded-full" />
+                <div className="shimmer h-3 w-[85%] rounded-full" />
+              </div>
+            </div>
+          )}
+
+          {research && <ResearchPanel research={research} />}
         </div>
       )}
+    </div>
+  );
+}
 
-      {status === "answered" && result && <Answer result={result} />}
+function ResearchPanel({ research }: { research: ResearchResp }) {
+  if (!research.available) {
+    return (
+      <div className="card fade-up p-6">
+        <p className="eyebrow mb-2">Web research is off</p>
+        <p className="text-[13px] text-ink-soft">
+          Add <span className="tnum text-ink">BROWSERBASE_API_KEY</span>,{" "}
+          <span className="tnum text-ink">BROWSERBASE_PROJECT_ID</span> and{" "}
+          <span className="tnum text-ink">ANTHROPIC_API_KEY</span> to enable browsing.
+        </p>
+      </div>
+    );
+  }
+  const findings = research.findings ?? [];
+  return (
+    <div className="card fade-up p-6 sm:p-7">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="eyebrow">From {SOURCE_LABEL[research.source ?? "web"] ?? "the web"}</p>
+        {!!research.added && <span className="eyebrow text-brand">{research.added} added to mesh</span>}
+      </div>
+
+      {research.error ? (
+        <p className="text-[14px] text-ink-soft">{research.error}</p>
+      ) : (
+        <p className="font-display text-[1.2rem] leading-relaxed text-ink">
+          {renderAnswer(research.answer ?? "")}
+        </p>
+      )}
+
+      {findings.length > 0 && (
+        <div className="mt-5 flex flex-col gap-2.5">
+          {findings.map((f, i) => (
+            <a
+              key={i}
+              href={f.url}
+              target="_blank"
+              rel="noreferrer"
+              className="card card-hover flex gap-3 rounded-[10px] p-3"
+            >
+              <span className="tnum mt-0.5 text-[12px] text-brand">[{i + 1}]</span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[14px] font-medium">{f.title}</p>
+                <p className="truncate text-[12px] text-ink-soft">{f.snippet}</p>
+                <p className="eyebrow mt-1 flex items-center gap-2">
+                  {(() => {
+                    try {
+                      return new URL(f.url).hostname.replace(/^www\./, "");
+                    } catch {
+                      return "link";
+                    }
+                  })()}
+                  {f.node_id && <span className="text-mint">· in mesh</span>}
+                </p>
+              </div>
+            </a>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -159,15 +339,14 @@ function Answer({ result }: { result: QueryResult }) {
   }, [result]);
 
   return (
-    <div className="fade-up mt-7 flex flex-col gap-6">
+    <div className="fade-up flex flex-col gap-6">
       <div className="card p-6 sm:p-7">
-        <p className="eyebrow mb-4">Synthesized answer</p>
+        <p className="eyebrow mb-4">From your team</p>
         <p className="font-display text-[1.2rem] leading-relaxed text-ink">{renderAnswer(result.answer)}</p>
       </div>
 
       {subNodes.length > 0 && (
         <div className="grid gap-6 lg:grid-cols-2">
-          {/* Sources */}
           <div className="card p-6">
             <p className="eyebrow mb-4">Sources · {subNodes.length}</p>
             <div className="flex flex-col gap-2.5">
@@ -189,7 +368,6 @@ function Answer({ result }: { result: QueryResult }) {
             </div>
           </div>
 
-          {/* Contributing subgraph */}
           <div className="card overflow-hidden p-6">
             <p className="eyebrow">Contributing subgraph</p>
             <p className="mb-3 mt-1 text-[12.5px] text-ink-soft">
