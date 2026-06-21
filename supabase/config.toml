@@ -39,6 +39,12 @@ enable_signup = true
 enable_signup = true
 enable_confirmations = false
 
+# Desktop signs in by typing a 6-digit code, so the email must render {{ .Token }}
+# (the default template only shows the magic link). Captured by Mailpit locally.
+[auth.email.template.magic_link]
+subject = "Your Continuum sign-in code"
+content_path = "./supabase/templates/magic_link.html"
+
 # Edge Functions. JWT verification is disabled for webhook/cron-invoked
 # functions which authenticate via their own shared secrets instead.
 [functions.agent-sync]
@@ -62,6 +68,17 @@ verify_jwt = false
 [functions.voice-transcribe]
 verify_jwt = true
 
+[functions.voice-speak]
+verify_jwt = true
+
 # Frontend-invoked: returns the cluster graph (nodes + edges) for D3 rendering.
 [functions.cluster-graph]
+verify_jwt = true
+
+# Frontend-invoked: create a workspace (caller becomes admin, gets a join code).
+[functions.cluster-create]
+verify_jwt = true
+
+# Frontend-invoked: redeem a join code to join a workspace as a member.
+[functions.cluster-join]
 verify_jwt = true

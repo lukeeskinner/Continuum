@@ -9,8 +9,9 @@ import { adminClient } from "../_shared/supabase.ts";
 import { claude, MODELS } from "../_shared/anthropic.ts";
 import { publishEvent, redisClient } from "../_shared/redis.ts";
 import { recordSpan } from "../_shared/trace.ts";
+import { PIPELINE } from "../_shared/pipeline_config.ts";
 
-const SIMILARITY_THRESHOLD = 0.82;
+const SIMILARITY_THRESHOLD = PIPELINE.connect.similarityThreshold;
 
 const CLASSIFY_SYSTEM =
   `You classify the relationship between two knowledge-graph nodes captured from two different teammates' screens.
@@ -52,7 +53,11 @@ Deno.serve(async (req) => {
   for (const { id: clusterId } of clusters ?? []) {
     const { data: candidates, error: candErr } = await supabase.rpc(
       "find_connection_candidates",
-      { target_cluster: clusterId, threshold: SIMILARITY_THRESHOLD, max_pairs: 50 },
+      {
+        target_cluster: clusterId,
+        threshold: SIMILARITY_THRESHOLD,
+        max_pairs: PIPELINE.connect.maxPairs,
+      },
     );
     if (candErr) {
       console.error("candidate query failed:", candErr.message);

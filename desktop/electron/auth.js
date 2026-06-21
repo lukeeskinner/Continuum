@@ -48,4 +48,23 @@ async function getIdentity() {
   };
 }
 
-module.exports = { isAuthenticated, signIn, signOut, getIdentity };
+// Resolve a { user_id -> display name } map for a cluster, used to label
+// inbound team activity in the overlay. RLS scopes this to clusters the signed
+// in user belongs to. Best-effort: returns {} on error.
+async function getMemberNames(clusterId) {
+  if (!clusterId) return {};
+  const { data, error } = await supabase()
+    .from("cluster_members")
+    .select("user_id, profiles(full_name, email)")
+    .eq("cluster_id", clusterId);
+  if (error || !data) return {};
+
+  const names = {};
+  for (const member of data) {
+    const profile = member.profiles ?? {};
+    names[member.user_id] = profile.full_name || profile.email || "A teammate";
+  }
+  return names;
+}
+
+module.exports = { isAuthenticated, signIn, signOut, getIdentity, getMemberNames };

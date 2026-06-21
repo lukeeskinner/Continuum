@@ -2,11 +2,15 @@
 //
 // Responsibilities:
 //   1. Authenticate the user (Supabase) and resolve their identity + Letta agent.
-//   2. Capture desktop frames via desktopCapturer (only on visual deltas).
-//   3. Send frames to the Python moondream2 sidecar for descriptor extraction.
-//   4. Run the privacy/PII filter and route the result (BLOCKED/LOCAL_ONLY/
-//      SHARED_ANON) to the user's Letta agent.
-//   5. Render an ambient glassmorphic status overlay.
+//   2. Capture desktop frames via desktopCapturer (idle-aware cadence;
+//      perceptual-hash + semantic dedup; blocked apps gated before vision).
+//   3. Send frames to the Python Claude-vision sidecar for descriptor extraction.
+//   4. Run the privacy/PII filter (with focused-app + Private Mode context) and
+//      route the result (BLOCKED/LOCAL_ONLY/SHARED_ANON) to the local buffer,
+//      the user's Letta agent, and — for SHARED_ANON — the team graph.
+//   5. Render an ambient glassmorphic status overlay + a Spotlight-style command
+//      bar that asks the team graph (with Deepgram voice in/out).
+//   6. Reflect inbound team activity (teammates' nodes + detected connections).
 // Load desktop/.env before anything reads process.env (config.js depends on it).
 require("./env").loadEnv();
 
@@ -14,7 +18,10 @@ const {
   app,
   BrowserWindow,
   desktopCapturer,
+  globalShortcut,
   ipcMain,
+  powerMonitor,
+  session,
   Tray,
   Menu,
   nativeImage,
@@ -25,26 +32,51 @@ const path = require("path");
 const config = require("./config");
 const { Sidecar } = require("./sidecar");
 const privacy = require("./privacy");
+const capturePolicy = require("./capturePolicy");
 const letta = require("./letta");
 const sync = require("./sync");
 const browserbase = require("./browserbase");
 const auth = require("./auth");
+const store = require("./store");
+const frontApp = require("./frontApp");
+const queryEngine = require("./queryEngine");
+const hub = require("./hub");
+const realtime = require("./realtime");
 
 let overlay = null;
 let loginWindow = null;
+let queryWindow = null;
 let tray = null;
 let sidecar = null;
-let captureTimer = null;
-let lastFrameSignature = null;
+let captureTimeout = null; // self-scheduling, idle-aware capture loop
+let retryTimer = null;
+let agentRunning = false; // signed in + capture loop scheduled
+let captureActive = false; // emitted the one-time "capture active" notice
+let consecutiveErrors = 0; // drives exponential backoff on pipeline errors
 let paused = false;
-// Single-flight guard: moondream inference can exceed the capture interval, so
-// we never start a new analysis while one is still running.
+// Manual Private Mode: nothing is shared with the team graph while on.
+let privateMode = false;
+let storeReady = false;
+let teammateNames = {};
+// Single-flight guard: vision inference can exceed the capture interval, so we
+// never start a new analysis while one is still running.
 let inFlight = false;
+
+// Skip visually-unchanged frames (perceptual hash) and repeated identical
+// descriptors within a window (semantic) — both avoid needless paid vision calls.
+const deduper = new capturePolicy.FrameDeduper({ threshold: config.hashThreshold });
+const semanticDeduper = new capturePolicy.SemanticDeduper({
+  windowMs: config.semanticDedupWindowMs,
+  forceMs: config.semanticForceMs,
+});
+
+// How often we retry SHARED_ANON observations that failed to reach the graph.
+const RETRY_INTERVAL_MS = 20_000;
 
 function createOverlay() {
   overlay = new BrowserWindow({
     width: 320,
-    height: 420,
+    height: 500,
     frame: false,
     transparent: true,
     alwaysOnTop: true,
@@ -57,6 +89,9 @@ function createOverlay() {
     },
   });
   overlay.loadFile(path.join(__dirname, "..", "renderer", "index.html"));
+  overlay.webContents.once("did-finish-load", () => {
+    overlay?.webContents.send("agent:privacy", { privateMode });
+  });
   overlay.on("closed", () => (overlay = null));
 }
 
@@ -76,23 +111,104 @@ function createLoginWindow() {
   loginWindow.on("closed", () => (loginWindow = null));
 }
 
-// Cheap perceptual signature: downsample-free mean over a sampled byte stride.
-function frameSignature(buffer) {
-  let sum = 0;
-  const stride = Math.max(1, Math.floor(buffer.length / 4096));
-  for (let i = 0; i < buffer.length; i += stride) sum += buffer[i];
-  return sum;
+// Spotlight-style command bar. Created hidden and summoned by the global
+// shortcut; dismissed on Escape or focus loss.
+function createQueryWindow() {
+  queryWindow = new BrowserWindow({
+    width: 640,
+    height: 480,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    resizable: false,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  queryWindow.loadFile(path.join(__dirname, "..", "renderer", "query.html"));
+  queryWindow.on("blur", () => queryWindow?.hide());
+  queryWindow.on("closed", () => (queryWindow = null));
 }
 
-function hasChanged(signature) {
-  if (lastFrameSignature === null) return true;
-  const delta = Math.abs(signature - lastFrameSignature);
-  return delta > config.frameDeltaThreshold * 4096;
+function toggleQuery() {
+  if (!queryWindow) createQueryWindow();
+  if (queryWindow.isVisible()) {
+    queryWindow.hide();
+    return;
+  }
+  queryWindow.center();
+  queryWindow.show();
+  queryWindow.focus();
+  queryWindow.webContents.send("query:show");
 }
 
-async function captureLoop() {
-  if (paused || inFlight || !sidecar) return;
+function safeIdleSeconds() {
+  try {
+    return powerMonitor.getSystemIdleTime();
+  } catch {
+    return 0;
+  }
+}
+
+// 8×8 grayscale average hash of the current frame — a reliable perceptual
+// signature (unlike summing the PNG-compressed bytes, which doesn't track
+// visual change). Returns a 64-bit BigInt, or null on failure.
+function frameHash(image) {
+  try {
+    const small = image.resize({ width: 8, height: 8, quality: "good" });
+    return capturePolicy.averageHash(capturePolicy.bgraToGray(small.toBitmap()));
+  } catch (err) {
+    console.error("[capture] hash failed:", err);
+    return null;
+  }
+}
+
+// Schedule the next capture with an idle-aware delay plus error backoff. This
+// replaces a fixed setInterval so the cadence relaxes when the user is idle.
+function scheduleCapture() {
+  if (!agentRunning) return;
+  clearTimeout(captureTimeout);
+  const base = capturePolicy.captureDelayMs(safeIdleSeconds(), config);
+  const delay = capturePolicy.backoffDelayMs(base, consecutiveErrors, config);
+  captureTimeout = setTimeout(captureTick, delay);
+}
+
+// One capture attempt. Cheap pre-vision gates (permission, deep-idle,
+// perceptual dedup, focused-app privacy block) avoid paying for a Claude
+// vision call whenever we don't actually need one.
+async function captureTick() {
+  captureTimeout = null;
+  if (!agentRunning) return;
+  if (paused || inFlight || !sidecar) {
+    scheduleCapture();
+    return;
+  }
+
+  // Wait (cheaply) until Screen Recording is granted; never re-prompt here.
+  if (!hasScreenPermission()) {
+    scheduleCapture();
+    return;
+  }
+  if (!captureActive) {
+    captureActive = true;
+    notifyOverlay({
+      decision: "SHARED_ANON",
+      descriptor: { app: "Continuum", concept: "Screen capture active." },
+    });
+  }
+
+  // Deep idle: don't capture at all, just keep polling for the user's return.
+  if (capturePolicy.isDeepIdle(safeIdleSeconds(), config)) {
+    scheduleCapture();
+    return;
+  }
+
   inFlight = true;
+  let hadError = false;
   try {
     const sources = await desktopCapturer.getSources({
       types: ["screen"],
@@ -101,38 +217,79 @@ async function captureLoop() {
     const screen = sources[0];
     if (!screen || screen.thumbnail.isEmpty()) return;
 
-    const png = screen.thumbnail.toPNG();
-    const signature = frameSignature(png);
-    if (!hasChanged(signature)) return;
-    lastFrameSignature = signature;
+    // Reliable perceptual-hash dedup: skip visually-unchanged frames.
+    const hash = frameHash(screen.thumbnail);
+    if (hash !== null && deduper.isDuplicate(hash)) return;
 
-    const descriptor = await sidecar.analyze(png.toString("base64"));
-    if (!descriptor) return;
+    // Pre-vision privacy gate: a blocked app's screen never reaches the cloud.
+    const front = await frontApp.getFrontmost().catch(() => null);
+    if (privacy.isBlockedBundle(front?.bundleId)) {
+      notifyOverlay({
+        decision: "BLOCKED",
+        descriptor: {
+          app: front?.name || "Private app",
+          concept: "Blocked before capture (privacy).",
+        },
+      });
+      return;
+    }
 
-    await handleDescriptor(descriptor);
+    const descriptor = await sidecar.analyze(screen.thumbnail.toPNG().toString("base64"));
+    if (!descriptor) {
+      hadError = true;
+      return;
+    }
+
+    // Semantic dedup: don't re-send an identical descriptor within the window.
+    if (semanticDeduper.shouldSkip(capturePolicy.descriptorKey(descriptor, front))) return;
+
+    await handleDescriptor(descriptor, {
+      bundleId: front?.bundleId ?? null,
+      appName: front?.name ?? null,
+      privateMode,
+    });
   } catch (err) {
     console.error("[capture] error:", err);
+    hadError = true;
   } finally {
     inFlight = false;
+    consecutiveErrors = hadError ? consecutiveErrors + 1 : 0;
+    scheduleCapture();
   }
 }
 
-async function handleDescriptor(descriptor) {
-  const decision = privacy.classify(descriptor);
+async function handleDescriptor(descriptor, ctx) {
+  const decision = privacy.classify(descriptor, ctx);
   notifyOverlay({ decision, descriptor });
 
   if (decision === "BLOCKED") return;
 
   const payload = decision === "SHARED_ANON" ? privacy.scrub(descriptor) : descriptor;
-  // Both LOCAL_ONLY and SHARED_ANON update the local Letta agent for per-user
-  // memory.
+
+  // Durable on-device record of every non-BLOCKED observation. SHARED_ANON rows
+  // start unsynced so a failed push can be retried instead of lost.
+  let rowId = null;
+  if (storeReady) {
+    try {
+      rowId = store.insertObservation({ decision, descriptor: payload, synced: false });
+    } catch (err) {
+      console.error("[store] insert failed:", err);
+    }
+  }
+
+  // Both LOCAL_ONLY and SHARED_ANON update the per-user Letta agent.
   await letta.postMessage(payload);
 
   // Only SHARED_ANON reaches the team graph. We push the structured descriptor
   // straight to agent-sync (deterministic) rather than relying on Letta's
   // autonomous archival promotion.
   if (decision !== "SHARED_ANON") return;
-  await sync.pushNode(payload).catch((err) => console.error("[sync] error:", err));
+  try {
+    const res = await sync.pushNode(payload);
+    if (res?.node_id && rowId != null && storeReady) store.markSynced(rowId, res.node_id);
+  } catch (err) {
+    console.error("[sync] error:", err); // leave the row unsynced for retry
+  }
 
   // Opt-in Browserbase enrichment: if the observation references an allowlisted
   // URL, fetch and embed the full page as a richer knowledge node.
@@ -142,8 +299,32 @@ async function handleDescriptor(descriptor) {
   }
 }
 
+// Replay SHARED_ANON observations that never made it to the graph (offline /
+// server error). Runs on an interval while the agent is signed in.
+async function flushUnsynced() {
+  if (!storeReady) return;
+  let pending = [];
+  try {
+    pending = store.unsyncedSharedNodes(20);
+  } catch {
+    return;
+  }
+  for (const row of pending) {
+    try {
+      const res = await sync.pushNode(row);
+      if (res?.node_id) store.markSynced(row.id, res.node_id);
+    } catch {
+      return; // still offline; try again next tick
+    }
+  }
+}
+
 function notifyOverlay(state) {
   overlay?.webContents.send("agent:state", state);
+}
+
+function notifyOverlayTeam(event) {
+  overlay?.webContents.send("team:event", event);
 }
 
 function togglePause() {
@@ -152,9 +333,16 @@ function togglePause() {
   return paused;
 }
 
+function setPrivateMode(on) {
+  privateMode = Boolean(on);
+  overlay?.webContents.send("agent:privacy", { privateMode });
+  rebuildTrayMenu();
+  return privateMode;
+}
+
 function rebuildTrayMenu() {
   if (!tray) return;
-  const running = captureTimer !== null;
+  const running = agentRunning;
 
   const runningItems = [
     {
@@ -167,8 +355,19 @@ function rebuildTrayMenu() {
       },
     },
     {
+      label: "Ask Continuum…",
+      accelerator: config.queryShortcut,
+      click: () => toggleQuery(),
+    },
+    {
       label: paused ? "Resume capture" : "Pause capture",
       click: () => togglePause(),
+    },
+    {
+      label: "Private Mode",
+      type: "checkbox",
+      checked: privateMode,
+      click: (item) => setPrivateMode(item.checked),
     },
     { type: "separator" },
     {
@@ -244,6 +443,39 @@ function ensureScreenPermission() {
   return false;
 }
 
+// Initialise the local SQLite buffer. Failure is non-fatal: persistence,
+// citations and the offline retry queue are simply disabled.
+async function initStore() {
+  try {
+    await store.init({
+      file: path.join(app.getPath("userData"), "continuum-buffer.db"),
+      wasmDir: app.isPackaged
+        ? path.join(process.resourcesPath, "app.asar.unpacked", "node_modules", "sql.js", "dist")
+        : undefined,
+    });
+    storeReady = true;
+  } catch (err) {
+    console.error("[store] init failed; running without local buffer:", err);
+    storeReady = false;
+  }
+}
+
+// Subscribe to inbound team activity and forward it to the overlay.
+async function startRealtime() {
+  if (!config.clusterId) return;
+  try {
+    teammateNames = await auth.getMemberNames(config.clusterId).catch(() => ({}));
+    await realtime.start({
+      clusterId: config.clusterId,
+      userId: config.userId,
+      nameFor: (uid) => teammateNames[uid] || "A teammate",
+      onEvent: notifyOverlayTeam,
+    });
+  } catch (err) {
+    console.error("[realtime] start failed:", err);
+  }
+}
+
 // Resolve identity, start the sidecar + capture loop, and show the overlay.
 async function startAgent() {
   try {
@@ -258,44 +490,72 @@ async function startAgent() {
     console.error("[agent] identity resolution failed:", err);
   }
 
+  await initStore();
   createOverlay();
-  // Show the overlay first so the permission guidance is visible, then gate
-  // capture on the OS permission.
-  const hasPermission = ensureScreenPermission();
+  // Show the overlay first so the permission guidance is visible, then prompt
+  // for the OS permission once. captureTick() polls for the grant itself.
+  ensureScreenPermission();
 
   sidecar = new Sidecar();
   sidecar.start();
   paused = false;
   inFlight = false;
-  lastFrameSignature = null;
-  if (hasPermission) {
-    captureTimer = setInterval(captureLoop, config.captureIntervalMs);
-  } else {
-    // Keep the sidecar alive but don't capture until permission is granted.
-    // Poll quietly (no repeated System Settings prompts) and switch over once
-    // the user grants access.
-    captureTimer = setInterval(() => {
-      if (hasScreenPermission()) {
-        clearInterval(captureTimer);
-        captureTimer = setInterval(captureLoop, config.captureIntervalMs);
-        notifyOverlay({
-          decision: "SHARED_ANON",
-          descriptor: { app: "Continuum", concept: "Screen capture active." },
-        });
-        rebuildTrayMenu();
-      }
-    }, 5000);
-  }
+  consecutiveErrors = 0;
+  captureActive = false;
+  deduper.reset();
+  semanticDeduper.reset();
+
+  // Self-scheduling, idle-aware capture loop (relaxes cadence when idle, pauses
+  // when deeply idle, backs off on errors).
+  agentRunning = true;
+  scheduleCapture();
+
+  // Offline retry queue + inbound team feed.
+  retryTimer = setInterval(flushUnsynced, RETRY_INTERVAL_MS);
+  flushUnsynced();
+  startRealtime();
+
+  // Global command-bar shortcut (Spotlight-style). Pre-create the window so the
+  // first summon is instant.
+  registerQueryShortcut();
+  if (!queryWindow) createQueryWindow();
+
   rebuildTrayMenu();
 }
 
+function registerQueryShortcut() {
+  try {
+    if (!globalShortcut.isRegistered(config.queryShortcut)) {
+      globalShortcut.register(config.queryShortcut, toggleQuery);
+    }
+  } catch (err) {
+    console.error("[shortcut] registration failed:", err);
+  }
+}
+
 function stopAgent() {
-  clearInterval(captureTimer);
-  captureTimer = null;
+  agentRunning = false;
+  clearTimeout(captureTimeout);
+  captureTimeout = null;
+  clearInterval(retryTimer);
+  retryTimer = null;
+  globalShortcut.unregister(config.queryShortcut);
+  realtime.stop().catch(() => {});
   sidecar?.stop();
   sidecar = null;
+  queryWindow?.hide();
   overlay?.close();
   rebuildTrayMenu();
+}
+
+// Allow microphone use for our renderer windows (the command bar's push-to-talk).
+function configureMediaPermissions() {
+  const handler = (_wc, permission, callback) =>
+    callback(permission === "media" || permission === "microphone");
+  session.defaultSession.setPermissionRequestHandler(handler);
+  session.defaultSession.setPermissionCheckHandler(
+    (_wc, permission) => permission === "media" || permission === "microphone",
+  );
 }
 
 // Enforce a single running instance; focus the existing one on relaunch.
@@ -315,6 +575,7 @@ if (!gotLock) {
   app.whenReady().then(async () => {
     // Ambient menu-bar agent: no dock icon on macOS.
     app.dock?.hide();
+    configureMediaPermissions();
     createTray();
     const authed = await auth.isAuthenticated().catch(() => false);
     if (authed) {
@@ -325,8 +586,13 @@ if (!gotLock) {
   });
 }
 
+// ── IPC: auth ───────────────────────────────────────────────────────────────
 ipcMain.handle("agent:toggle", () => {
   return { paused: togglePause() };
+});
+
+ipcMain.handle("privacy:toggle", () => {
+  return { privateMode: setPrivateMode(!privateMode) };
 });
 
 ipcMain.handle("auth:status", async () => {
@@ -349,6 +615,56 @@ ipcMain.handle("auth:signOut", async () => {
   await auth.signOut().catch(() => {});
   createLoginWindow();
   return { ok: true };
+});
+
+// ── IPC: command bar (query + voice) ─────────────────────────────────────────
+ipcMain.on("query:ask", async (_e, text) => {
+  const result = await queryEngine.answer(text);
+  queryWindow?.webContents.send("query:response", result);
+});
+
+ipcMain.on("query:hide", () => queryWindow?.hide());
+
+// Push-to-talk: ensure mic access (macOS TCC prompt) before the renderer records.
+ipcMain.handle("voice:ensureMic", async () => {
+  if (process.platform !== "darwin") return { ok: true };
+  try {
+    const ok = await systemPreferences.askForMediaAccess("microphone");
+    return { ok };
+  } catch {
+    return { ok: false };
+  }
+});
+
+// Transcribe a recorded clip via the hub (Deepgram). `bytes` is an ArrayBuffer.
+ipcMain.handle("voice:transcribe", async (_e, { bytes, mime }) => {
+  try {
+    const transcript = await hub.transcribe(Buffer.from(bytes), mime || "audio/webm");
+    return { ok: true, transcript };
+  } catch (err) {
+    return { ok: false, error: String(err.message ?? err) };
+  }
+});
+
+// Synthesize the answer to speech via the hub (Deepgram aura). Returns base64 mp3.
+ipcMain.handle("voice:speak", async (_e, text) => {
+  try {
+    const audio = await hub.speak(text);
+    return { ok: true, audio: audio.toString("base64"), mime: "audio/mpeg" };
+  } catch (err) {
+    return { ok: false, error: String(err.message ?? err) };
+  }
+});
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
+  if (storeReady) {
+    try {
+      store.close();
+    } catch {
+      // already closed
+    }
+  }
 });
 
 // With a tray, closing the panel keeps the agent resident; quit via the tray.

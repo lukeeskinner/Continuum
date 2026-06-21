@@ -13,6 +13,7 @@ const NAV = [
   { href: "/", label: "Overview", end: true },
   { href: "/graph", label: "Live graph" },
   { href: "/query", label: "Ask the mesh" },
+  { href: "/workspaces", label: "Workspaces" },
   { href: "/manage", label: "Manage" },
 ];
 

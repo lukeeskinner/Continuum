@@ -16,6 +16,7 @@ export interface ClusterRow {
   id: string;
   name: string;
   created_at: string;
+  join_code?: string; // present once migration 0007 is applied
 }
 
 // cluster_members joined with its cluster (used to resolve the active cluster).

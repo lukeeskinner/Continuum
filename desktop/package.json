@@ -13,7 +13,9 @@
     "dist:win": "electron-builder --win"
   },
   "dependencies": {
-    "@supabase/supabase-js": "^2.45.4"
+    "@supabase/supabase-js": "^2.45.4",
+    "sql.js": "^1.14.1",
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "electron": "32.2.7",
@@ -28,22 +30,34 @@
       "renderer/**/*",
       "assets/**/*"
     ],
+    "asarUnpack": [
+      "**/node_modules/sql.js/dist/sql-wasm.wasm"
+    ],
     "extraResources": [
       {
         "from": "sidecar",
         "to": "sidecar",
-        "filter": ["**/*", "!.venv/**"]
+        "filter": [
+          "**/*",
+          "!.venv/**"
+        ]
       }
     ],
     "mac": {
       "category": "public.app-category.productivity",
-      "target": ["dmg"]
+      "target": [
+        "dmg"
+      ]
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     },
     "linux": {
-      "target": ["AppImage"]
+      "target": [
+        "AppImage"
+      ]
     }
   }
 }

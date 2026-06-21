@@ -1,17 +1,17 @@
 #!/usr/bin/env node
-// Smoke test for the moondream2 vision sidecar.
+// Smoke test for the Claude-vision sidecar.
 //
 // Exercises the exact stdin/stdout contract the Electron main process uses:
 // writes a `{ "frame": "<base64 png>" }` line and expects a single descriptor
 // JSON line back with the keys { app, topic, concept, error_type }.
 //
 // This validates the IPC protocol and graceful-fallback behaviour without
-// requiring the moondream2 weights to be downloaded: if the model (or PIL/
-// transformers) is unavailable the sidecar still emits a well-formed fallback
-// descriptor, which is what this test asserts.
+// requiring a valid ANTHROPIC_API_KEY: if the key is missing/invalid or the
+// `anthropic` package is unavailable, the sidecar still emits a well-formed
+// fallback descriptor, which is what this test asserts.
 //
 // Usage: node scripts/test-sidecar.js
-//        PYTHON_PATH=python3 SIDECAR_SCRIPT=desktop/sidecar/sidecar.py node scripts/test-sidecar.js
+//        PYTHON_PATH=desktop/sidecar/.venv/bin/python3 node scripts/test-sidecar.js
 const { spawn } = require("child_process");
 const path = require("path");
 

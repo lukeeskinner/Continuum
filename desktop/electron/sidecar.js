@@ -1,4 +1,4 @@
-// Python sidecar orchestrator. Spawns the moondream2 process and exchanges
+// Python sidecar orchestrator. Spawns the Claude-vision process and exchanges
 // newline-delimited JSON over stdin/stdout:
 //   -> { "frame": "<base64 png>" }
 //   <- { "app": ..., "topic": ..., "concept": ..., "error_type": ... }
@@ -15,7 +15,9 @@ const path = require("path");
 const { app } = require("electron");
 const config = require("./config");
 
-// First inference lazily loads the model, which can take a while on CPU.
+// First request lazily initialises the Anthropic client; later calls are
+// network-bound. Keep a generous timeout so a slow response can't leak a
+// pending promise.
 const ANALYZE_TIMEOUT_MS = Number(process.env.SIDECAR_TIMEOUT_MS || 180_000);
 const RESTART_BACKOFF_MS = 2_000;
 

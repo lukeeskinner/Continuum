@@ -10,6 +10,7 @@ const sessionCount = document.getElementById("session-count");
 const blockCount = document.getElementById("block-count");
 const obsList    = document.getElementById("obs-list");
 const toggle     = document.getElementById("toggle");
+const privacyBtn = document.getElementById("privacy");
 const signout    = document.getElementById("signout");
 const currentEl  = document.getElementById("current");
 const currentApp = document.getElementById("current-app");
@@ -87,6 +88,21 @@ toggle.addEventListener("click", async () => {
   const { paused } = await window.continuum.toggle();
   toggle.textContent = paused ? "Resume" : "Pause";
   dot.style.opacity  = paused ? "0.3" : "1";
+});
+
+let privateMode = false;
+function reflectPrivacy() {
+  privacyBtn.textContent = privateMode ? "Private ●" : "Private";
+  privacyBtn.style.color = privateMode ? "var(--local)" : "";
+}
+privacyBtn.addEventListener("click", () => {
+  privateMode = !privateMode;
+  window.continuum.setPrivacyMode(privateMode ? "private" : "shared");
+  reflectPrivacy();
+});
+window.continuum.onPrivacyMode(({ privateMode: pm }) => {
+  privateMode = pm;
+  reflectPrivacy();
 });
 
 signout.addEventListener("click", () => window.continuum.signOut());

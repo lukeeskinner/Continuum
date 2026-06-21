@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const { app } = require("electron");
 const { createClient } = require("@supabase/supabase-js");
+const WebSocket = require("ws");
 const config = require("./config");
 
 function sessionFile() {
@@ -57,6 +58,9 @@ function supabase() {
       autoRefreshToken: true,
       detectSessionInUrl: false,
       storage: fileStorage,
+    },
+    realtime: {
+      transport: WebSocket,
     },
   });
   return client;

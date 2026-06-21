@@ -20,6 +20,8 @@ interface ClusterState {
   setActiveId: (id: string) => void;
   members: MemberRow[];
   refreshMembers: () => Promise<void>;
+  /** Re-fetch memberships (e.g. after create/join) and optionally switch. */
+  refresh: (preferId?: string) => Promise<void>;
 }
 
 const Ctx = createContext<ClusterState | null>(null);
@@ -64,6 +66,17 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const refresh = useCallback(async (preferId?: string) => {
+    const ms = await fetchMemberships().catch(() => [] as MembershipRow[]);
+    setMemberships(ms);
+    const ids = ms.map((m) => m.cluster_id);
+    setActiveId((cur) => {
+      if (preferId && ids.includes(preferId)) return preferId;
+      if (cur && ids.includes(cur)) return cur;
+      return ids[0] ?? null;
+    });
+  }, []);
+
   useEffect(() => {
     if (!activeId) return;
     let cancelled = false;
@@ -89,6 +102,7 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
         setActiveId,
         members,
         refreshMembers: () => (activeId ? loadMembers(activeId) : Promise.resolve()),
+        refresh,
       }}
     >
       {children}

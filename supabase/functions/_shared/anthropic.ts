@@ -7,7 +7,7 @@ export const MODELS = {
   // Fast/cheap relationship classification.
   HAIKU: "claude-haiku-4-5",
   // Citation-aware synthesis.
-  SONNET: "claude-sonnet-4-6",
+  SONNET: "claude-sonnet-4-5",
 } as const;
 interface ClaudeMessage {
   role: "user" | "assistant";

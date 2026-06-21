@@ -27,10 +27,33 @@ module.exports = {
     .map((d) => d.trim().toLowerCase())
     .filter(Boolean),
 
-  // Capture tuning.
+  // Extra macOS bundle ids to hard-block (merged with privacy.js defaults).
+  // Comma-separated, e.g. "com.acme.banking,com.example.vault".
+  blockBundles: (process.env.PRIVACY_BLOCK_BUNDLES || "")
+    .split(",")
+    .map((d) => d.trim().toLowerCase())
+    .filter(Boolean),
+
+  // Global shortcut that toggles the query (Spotlight-style) command bar.
+  queryShortcut: process.env.QUERY_SHORTCUT || "CommandOrControl+Shift+Space",
+
+  // Capture tuning — active cadence.
   captureIntervalMs: Number(process.env.CAPTURE_INTERVAL_MS || 4000),
-  // Mean per-pixel delta (0-255) above which a frame is considered "changed".
-  frameDeltaThreshold: Number(process.env.FRAME_DELTA_THRESHOLD || 6),
+  // Adaptive sampling: stretch toward idleIntervalMs once the user has been idle
+  // past idlePauseSeconds; only light-poll for the user's return after
+  // deepIdleSeconds (no captures / no paid vision calls while deeply idle).
+  idleIntervalMs: Number(process.env.IDLE_CAPTURE_INTERVAL_MS || 16000),
+  idlePauseSeconds: Number(process.env.IDLE_PAUSE_SECONDS || 30),
+  deepIdleSeconds: Number(process.env.DEEP_IDLE_SECONDS || 300),
+  deepIdlePollMs: Number(process.env.DEEP_IDLE_POLL_MS || 5000),
+  // Exponential backoff cap after consecutive pipeline errors.
+  maxBackoffMs: Number(process.env.MAX_BACKOFF_MS || 60000),
+  // Perceptual-hash Hamming distance at/below which two frames count identical.
+  hashThreshold: Number(process.env.HASH_HAMMING_THRESHOLD || 6),
+  // Semantic dedup: skip identical descriptors within this window, but force one
+  // through every semanticForceMs so long-lived contexts still refresh.
+  semanticDedupWindowMs: Number(process.env.SEMANTIC_DEDUP_WINDOW_MS || 60000),
+  semanticForceMs: Number(process.env.SEMANTIC_FORCE_REFRESH_MS || 120000),
 
   // Python sidecar.
   pythonPath: process.env.PYTHON_PATH || "python3",

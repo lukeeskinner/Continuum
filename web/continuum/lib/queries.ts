@@ -4,6 +4,7 @@ import { getSupabase } from "./supabase/client";
 import type {
   MembershipRow,
   MemberRow,
+  MemberRole,
   SemanticNodeRow,
   SemanticEdgeRow,
   InviteRow,
@@ -59,6 +60,64 @@ export async function fetchInvites(clusterId: string): Promise<InviteRow[]> {
     .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []) as InviteRow[];
+}
+
+// ---- workspace create / join (via Edge Functions) ----
+
+export interface CreatedCluster {
+  cluster_id: string;
+  name: string;
+  join_code: string;
+  role: MemberRole;
+}
+
+export interface JoinedCluster {
+  cluster_id: string;
+  name: string;
+  role: MemberRole;
+}
+
+// Edge Functions reject with a JSON `{ error }` body; supabase-js surfaces that
+// as a FunctionsHttpError whose `.context` is the raw Response. Pull the
+// server's message out so the UI can show "invalid join code" etc.
+async function functionErrorMessage(error: { message: string; context?: unknown }): Promise<string> {
+  const ctx = (error as { context?: { json?: () => Promise<unknown> } }).context;
+  try {
+    const body = (await ctx?.json?.()) as { error?: string } | undefined;
+    if (body?.error) return body.error;
+  } catch {
+    /* fall through to the generic message */
+  }
+  return error.message || "Request failed.";
+}
+
+export async function createCluster(name: string): Promise<CreatedCluster> {
+  const { data, error } = await getSupabase().functions.invoke<CreatedCluster>("cluster-create", {
+    body: { name },
+  });
+  if (error) throw new Error(await functionErrorMessage(error));
+  if (!data) throw new Error("Workspace creation returned no data.");
+  return data;
+}
+
+export async function joinCluster(joinCode: string): Promise<JoinedCluster> {
+  const { data, error } = await getSupabase().functions.invoke<JoinedCluster>("cluster-join", {
+    body: { join_code: joinCode },
+  });
+  if (error) throw new Error(await functionErrorMessage(error));
+  if (!data) throw new Error("Joining the workspace returned no data.");
+  return data;
+}
+
+/** The shareable join code for a cluster the user belongs to (RLS-scoped). */
+export async function fetchClusterJoinCode(clusterId: string): Promise<string | null> {
+  const { data, error } = await getSupabase()
+    .from("clusters")
+    .select("join_code")
+    .eq("id", clusterId)
+    .single();
+  if (error) return null;
+  return (data as { join_code?: string } | null)?.join_code ?? null;
 }
 
 // ---- mappers ----
