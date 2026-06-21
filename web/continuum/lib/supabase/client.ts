@@ -20,3 +20,17 @@ export function getSupabase(): SupabaseClient {
   });
   return _client;
 }
+
+// A guaranteed-fresh access token for authorizing calls to our own API routes.
+// getSession() can return a stale token (supabase-js refreshes lazily), so we
+// proactively refresh when it's missing or near expiry.
+export async function getAccessToken(): Promise<string> {
+  const sb = getSupabase();
+  const { data: { session } } = await sb.auth.getSession();
+  const soon = Date.now() + 120_000;
+  if (!session || ((session.expires_at ?? 0) * 1000) < soon) {
+    const { data } = await sb.auth.refreshSession();
+    return data.session?.access_token ?? session?.access_token ?? "";
+  }
+  return session.access_token ?? "";
+}

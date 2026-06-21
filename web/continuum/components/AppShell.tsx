@@ -24,7 +24,7 @@ function isActive(pathname: string, href: string, end?: boolean) {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user, signOut } = useAuth();
-  const { active, members } = useCluster();
+  const { active, members, online } = useCluster();
 
   const me = {
     id: user?.id ?? "me",
@@ -110,7 +110,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             <span className="eyebrow">
               {active?.name ?? "no cluster"}
               <span className="mx-2 text-line">/</span>
-              <span className="text-ink-soft">{members.length} members</span>
+              <span className="text-ink-soft">{online.size} observing now</span>
             </span>
           </div>
 
@@ -121,9 +121,13 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
                 return (
                   <span
                     key={m.user_id}
-                    title={name}
-                    className="grid h-7 w-7 place-items-center rounded-full text-[10px] font-semibold text-[#0b0e1a] ring-2 ring-[#0b0e1a]"
-                    style={{ background: accentForUser(m.user_id), marginLeft: i === 0 ? 0 : -7 }}
+                    title={`${name}${online.has(m.user_id) ? " · online" : ""}`}
+                    className="grid h-7 w-7 place-items-center rounded-full text-[10px] font-semibold text-[#0b0e1a]"
+                    style={{
+                      background: accentForUser(m.user_id),
+                      marginLeft: i === 0 ? 0 : -7,
+                      boxShadow: `0 0 0 2px ${online.has(m.user_id) ? "#2fc4b2" : "#0b0e1a"}`,
+                    }}
                   >
                     {initials(name)}
                   </span>

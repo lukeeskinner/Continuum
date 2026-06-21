@@ -28,7 +28,7 @@ function ago(iso: string): string {
 }
 
 export default function OverviewPage() {
-  const { active, members } = useCluster();
+  const { active, members, online } = useCluster();
   const [nodeRows, setNodeRows] = useState<SemanticNodeRow[]>([]);
   const [edgeRows, setEdgeRows] = useState<SemanticEdgeRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -188,17 +188,22 @@ export default function OverviewPage() {
               const name = displayName(m.profiles);
               return (
                 <li key={m.user_id} className="flex items-center gap-3">
-                  <span
-                    className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[10px] font-semibold text-[#0b0e1a]"
-                    style={{ background: accentForUser(m.user_id) }}
-                  >
-                    {firstName(name).slice(0, 2).toUpperCase()}
+                  <span className="relative shrink-0">
+                    <span
+                      className="grid h-8 w-8 place-items-center rounded-full text-[10px] font-semibold text-[#0b0e1a]"
+                      style={{ background: accentForUser(m.user_id) }}
+                    >
+                      {firstName(name).slice(0, 2).toUpperCase()}
+                    </span>
+                    {online.has(m.user_id) && (
+                      <span className="dot-online absolute -bottom-0.5 -right-0.5 ring-2 ring-[#121626]" />
+                    )}
                   </span>
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-[13.5px] font-medium">{name}</p>
                     <p className="truncate text-[11px] text-ink-faint">{m.profiles?.email}</p>
                   </div>
-                  <span className="eyebrow shrink-0">{m.role}</span>
+                  <span className="eyebrow shrink-0">{online.has(m.user_id) ? "online" : m.role}</span>
                 </li>
               );
             })}

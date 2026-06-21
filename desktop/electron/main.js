@@ -42,6 +42,19 @@ const frontApp = require("./frontApp");
 const queryEngine = require("./queryEngine");
 const hub = require("./hub");
 const realtime = require("./realtime");
+const sentry = require("./sentry");
+const orkes = require("./orkes");
+
+// Report any otherwise-unhandled failure to Sentry (no-op until init() runs and
+// a DSN is configured). Registered once at module load.
+process.on("uncaughtException", (err) => {
+  console.error("[uncaught]", err);
+  sentry.captureException(err, { level: "fatal", tags: { stage: "uncaughtException" } });
+});
+process.on("unhandledRejection", (reason) => {
+  console.error("[unhandledRejection]", reason);
+  sentry.captureException(reason, { tags: { stage: "unhandledRejection" } });
+});
 
 let overlay = null;
 let loginWindow = null;
@@ -251,6 +264,7 @@ async function captureTick() {
   } catch (err) {
     console.error("[capture] error:", err);
     hadError = true;
+    sentry.captureException(err, { tags: { stage: "capture" } });
   } finally {
     inFlight = false;
     consecutiveErrors = hadError ? consecutiveErrors + 1 : 0;
@@ -260,6 +274,9 @@ async function captureTick() {
 
 async function handleDescriptor(descriptor, ctx) {
   const decision = privacy.classify(descriptor, ctx);
+  sentry.addBreadcrumb("capture", `${decision}: ${descriptor.app || "unknown"}`, {
+    topic: descriptor.topic,
+  });
   notifyOverlay({ decision, descriptor });
 
   if (decision === "BLOCKED") return;
@@ -280,15 +297,34 @@ async function handleDescriptor(descriptor, ctx) {
   // Both LOCAL_ONLY and SHARED_ANON update the per-user Letta agent.
   await letta.postMessage(payload);
 
-  // Only SHARED_ANON reaches the team graph. We push the structured descriptor
-  // straight to agent-sync (deterministic) rather than relying on Letta's
-  // autonomous archival promotion.
+  // Only SHARED_ANON reaches the team graph. When Orkes is configured, ingest
+  // via a durable Conductor workflow that orchestrates the agent-sync call;
+  // otherwise push the structured descriptor straight to agent-sync.
   if (decision !== "SHARED_ANON") return;
-  try {
-    const res = await sync.pushNode(payload);
-    if (res?.node_id && rowId != null && storeReady) store.markSynced(rowId, res.node_id);
-  } catch (err) {
-    console.error("[sync] error:", err); // leave the row unsynced for retry
+  if (orkes.isConfigured()) {
+    orkes
+      .startIngest(payload)
+      .then((wfId) => {
+        console.log("[orkes] ingest workflow started:", wfId);
+        if (rowId != null && storeReady) store.markSynced(rowId, wfId);
+      })
+      .catch((err) => {
+        console.error("[orkes] start failed, posting directly:", err.message);
+        sentry.captureException(err, { tags: { stage: "orkes" } });
+        return sync.pushNode(payload)
+          .then((res) => {
+            if (res?.node_id && rowId != null && storeReady) store.markSynced(rowId, res.node_id);
+          })
+          .catch((e) => console.error("[sync] error:", e));
+      });
+  } else {
+    try {
+      const res = await sync.pushNode(payload);
+      if (res?.node_id && rowId != null && storeReady) store.markSynced(rowId, res.node_id);
+    } catch (err) {
+      console.error("[sync] error:", err);
+    }
+  }
   }
 
   // Opt-in Browserbase enrichment: if the observation references an allowlisted
@@ -521,6 +557,21 @@ async function startAgent() {
   if (!queryWindow) createQueryWindow();
 
   rebuildTrayMenu();
+
+  sentry.captureMessage("desktop agent started", "info", {
+    tags: { cluster_id: config.clusterId || "none" },
+  });
+
+  // Register the Orkes ingest workflow once (idempotent) when configured.
+  if (orkes.isConfigured()) {
+    orkes
+      .registerWorkflow()
+      .then(() => console.log("[orkes] workflow registered:", orkes.WORKFLOW_NAME))
+      .catch((err) => {
+        console.error("[orkes] workflow registration failed:", err.message);
+        sentry.captureException(err, { tags: { stage: "orkes-register" } });
+      });
+  }
 }
 
 function registerQueryShortcut() {
@@ -576,6 +627,7 @@ if (!gotLock) {
     // Ambient menu-bar agent: no dock icon on macOS.
     app.dock?.hide();
     configureMediaPermissions();
+    sentry.init();
     createTray();
     const authed = await auth.isAuthenticated().catch(() => false);
     if (authed) {

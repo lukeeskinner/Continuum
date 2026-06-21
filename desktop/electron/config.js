@@ -1,7 +1,17 @@
 // Desktop agent configuration, sourced from environment variables.
 // Copy desktop/.env.example to desktop/.env and load it before launching.
 
+let appVersion = "0.0.0";
+try {
+  appVersion = require("../package.json").version || appVersion;
+} catch {
+  // package.json not resolvable (unusual); keep the default.
+}
+
 module.exports = {
+  // App version, surfaced as the Sentry release.
+  appVersion,
+
   lettaApiKey: process.env.LETTA_API_KEY || "",
   lettaBaseUrl: process.env.LETTA_BASE_URL || "https://api.letta.com",
   lettaAgentId: process.env.LETTA_AGENT_ID || "",
@@ -37,7 +47,18 @@ module.exports = {
   // Global shortcut that toggles the query (Spotlight-style) command bar.
   queryShortcut: process.env.QUERY_SHORTCUT || "CommandOrControl+Shift+Space",
 
-  // Capture tuning — active cadence.
+  // Sentry error monitoring (optional). Disabled when SENTRY_DSN is unset.
+  sentryDsn: process.env.SENTRY_DSN || "",
+  sentryEnvironment: process.env.SENTRY_ENVIRONMENT || "development",
+
+  // Orkes Conductor workflow orchestration (optional). When configured, each
+  // SHARED_ANON observation is ingested via a durable Conductor workflow that
+  // orchestrates the agent-sync call; otherwise it posts to agent-sync directly.
+  orkesServerUrl: process.env.ORKES_SERVER_URL || "",
+  orkesKeyId: process.env.ORKES_KEY_ID || "",
+  orkesKeySecret: process.env.ORKES_KEY_SECRET || "",
+
+  // Capture tuning.
   captureIntervalMs: Number(process.env.CAPTURE_INTERVAL_MS || 4000),
   // Adaptive sampling: stretch toward idleIntervalMs once the user has been idle
   // past idlePauseSeconds; only light-poll for the user's return after

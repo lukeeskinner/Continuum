@@ -5,6 +5,7 @@
 import { createContext, useCallback, useContext, useEffect, useState } from "react";
 import { useAuth } from "./auth";
 import { fetchMemberships, fetchMembers } from "@/lib/queries";
+import { getAccessToken } from "@/lib/supabase/client";
 import type { MembershipRow, MemberRow, MemberRole } from "@/types/db";
 
 export interface ActiveCluster {
@@ -19,6 +20,7 @@ interface ClusterState {
   active: ActiveCluster | null;
   setActiveId: (id: string) => void;
   members: MemberRow[];
+  online: Set<string>;
   refreshMembers: () => Promise<void>;
   /** Re-fetch memberships (e.g. after create/join) and optionally switch. */
   refresh: (preferId?: string) => Promise<void>;
@@ -37,6 +39,7 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
   const [memberships, setMemberships] = useState<MembershipRow[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [members, setMembers] = useState<MemberRow[]>([]);
+  const [online, setOnline] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -88,6 +91,45 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
     };
   }, [activeId]);
 
+  // Presence: heartbeat ourselves into the cluster's online set + poll it.
+  useEffect(() => {
+    if (!activeId) return;
+    let stop = false;
+    const cid = activeId;
+    const apply = (j: unknown) => {
+      const list = (j as { online?: string[] })?.online;
+      if (!stop && Array.isArray(list)) setOnline(new Set(list));
+    };
+    const beat = async () => {
+      try {
+        const token = await getAccessToken();
+        const res = await fetch("/api/presence", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ cluster_id: cid }),
+        });
+        apply(await res.json());
+      } catch {
+        /* best-effort */
+      }
+    };
+    const poll = async () => {
+      try {
+        apply(await (await fetch(`/api/presence?cluster_id=${cid}`)).json());
+      } catch {
+        /* best-effort */
+      }
+    };
+    beat();
+    const a = setInterval(beat, 20_000);
+    const b = setInterval(poll, 12_000);
+    return () => {
+      stop = true;
+      clearInterval(a);
+      clearInterval(b);
+    };
+  }, [activeId]);
+
   const activeRow = memberships.find((m) => m.cluster_id === activeId) ?? null;
   const active: ActiveCluster | null = activeRow
     ? { id: activeRow.cluster_id, name: activeRow.clusters?.name ?? "Workspace", role: activeRow.role }
@@ -101,6 +143,7 @@ export function ClusterProvider({ children }: { children: React.ReactNode }) {
         active,
         setActiveId,
         members,
+        online,
         refreshMembers: () => (activeId ? loadMembers(activeId) : Promise.resolve()),
         refresh,
       }}
