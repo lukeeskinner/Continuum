@@ -10,7 +10,10 @@ const config = require("./config");
 const WORKFLOW_NAME = "continuum_ingest";
 
 function base() {
-  return config.orkesServerUrl.replace(/\/$/, "");
+  // Normalize the server URL: drop a trailing slash and an accidental trailing
+  // "/api" (the API paths below already include "/api"), so both
+  // "https://developer.orkescloud.com" and ".../api" work.
+  return config.orkesServerUrl.replace(/\/+$/, "").replace(/\/api$/i, "");
 }
 
 function isConfigured() {
