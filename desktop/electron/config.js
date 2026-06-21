@@ -1,7 +1,17 @@
 // Desktop agent configuration, sourced from environment variables.
 // Copy desktop/.env.example to desktop/.env and load it before launching.
 
+let appVersion = "0.0.0";
+try {
+  appVersion = require("../package.json").version || appVersion;
+} catch {
+  // package.json not resolvable (unusual); keep the default.
+}
+
 module.exports = {
+  // App version, surfaced as the Sentry release.
+  appVersion,
+
   lettaApiKey: process.env.LETTA_API_KEY || "",
   lettaBaseUrl: process.env.LETTA_BASE_URL || "https://api.letta.com",
   lettaAgentId: process.env.LETTA_AGENT_ID || "",

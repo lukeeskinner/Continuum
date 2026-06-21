@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { parseDsn, buildEvent } = require("./sentry");
+const { parseDsn, buildEvent, buildMessageEvent, addBreadcrumb } = require("./sentry");
 
 test("parseDsn: extracts key, host, project id, and store url", () => {
   const out = parseDsn("https://abc123@o42.ingest.sentry.io/567");
@@ -34,4 +34,28 @@ test("buildEvent: coerces a non-Error value into an event", () => {
   const event = buildEvent("plain string failure");
   assert.strictEqual(event.exception.values[0].value, "plain string failure");
   assert.strictEqual(event.exception.values[0].type, "Error");
+});
+
+test("buildEvent: tags the release + platform", () => {
+  const event = buildEvent(new Error("x"));
+  assert.match(event.release, /^continuum-desktop@/);
+  assert.strictEqual(event.tags.platform, process.platform);
+  assert.strictEqual(event.tags.component, "desktop-agent");
+});
+
+test("addBreadcrumb: breadcrumbs are attached to subsequent events", () => {
+  addBreadcrumb("capture", "SHARED_ANON: Cursor", { topic: "rust" });
+  const event = buildEvent(new Error("later"));
+  const values = event.breadcrumbs.values;
+  assert.ok(values.length >= 1);
+  const last = values[values.length - 1];
+  assert.strictEqual(last.category, "capture");
+  assert.strictEqual(last.message, "SHARED_ANON: Cursor");
+});
+
+test("buildMessageEvent: builds an informational (non-crash) event", () => {
+  const event = buildMessageEvent("agent started", "info");
+  assert.strictEqual(event.level, "info");
+  assert.strictEqual(event.message.formatted, "agent started");
+  assert.ok(!event.exception, "message events have no exception");
 });

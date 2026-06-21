@@ -133,6 +133,9 @@ async function captureLoop() {
 
 async function handleDescriptor(descriptor) {
   const decision = privacy.classify(descriptor);
+  sentry.addBreadcrumb("capture", `${decision}: ${descriptor.app || "unknown"}`, {
+    topic: descriptor.topic,
+  });
   notifyOverlay({ decision, descriptor });
 
   if (decision === "BLOCKED") return;
@@ -312,6 +315,10 @@ async function startAgent() {
     }, 5000);
   }
   rebuildTrayMenu();
+
+  sentry.captureMessage("desktop agent started", "info", {
+    tags: { cluster_id: config.clusterId || "none" },
+  });
 
   // Register the Orkes ingest workflow once (idempotent) when configured.
   if (orkes.isConfigured()) {

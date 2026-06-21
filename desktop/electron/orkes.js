@@ -44,14 +44,31 @@ async function authHeaders() {
 }
 
 // The Conductor workflow definition. Pure; exported for unit testing.
-// A single HTTP task POSTs the descriptor to the agent-sync Edge Function.
+// A 2-step pipeline: (1) an HTTP task POSTs the descriptor to agent-sync, then
+// (2) an inline task derives a human-readable label. Production resilience is
+// declared on the workflow: a timeout that only alerts (never drops the node)
+// and a restartable flag, with the inline step marked optional so a transform
+// hiccup can't fail an already-persisted observation.
 function buildIngestWorkflowDef() {
   return {
     name: WORKFLOW_NAME,
-    description: "Ingest a Continuum observation into the team graph via agent-sync.",
+    description:
+      "Ingest a Continuum screen observation into the team knowledge graph via " +
+      "agent-sync, then derive a human-readable summary.",
     version: 1,
     schemaVersion: 2,
     ownerEmail: "continuum@continuum.dev",
+    timeoutSeconds: 120,
+    timeoutPolicy: "ALERT_ONLY",
+    restartable: true,
+    inputParameters: [
+      "functionsUrl",
+      "secret",
+      "agentId",
+      "userId",
+      "clusterId",
+      "descriptor",
+    ],
     tasks: [
       {
         name: "agent_sync_http",
@@ -62,6 +79,9 @@ function buildIngestWorkflowDef() {
             uri: "${workflow.input.functionsUrl}/agent-sync",
             method: "POST",
             contentType: "application/json",
+            accept: "application/json",
+            connectionTimeOut: 5000,
+            readTimeOut: 20000,
             headers: {
               "x-continuum-secret": "${workflow.input.secret}",
             },
@@ -74,9 +94,24 @@ function buildIngestWorkflowDef() {
           },
         },
       },
+      {
+        name: "summarize_observation",
+        taskReferenceName: "summarize",
+        type: "INLINE",
+        optional: true,
+        inputParameters: {
+          evaluatorType: "graaljs",
+          app: "${workflow.input.descriptor.app}",
+          concept: "${workflow.input.descriptor.concept}",
+          nodeId: "${agent_sync.output.response.body.node_id}",
+          expression:
+            "(function () { return { label: ($.concept || 'observation') + ' (' + ($.app || 'unknown') + ')', node_id: $.nodeId }; })();",
+        },
+      },
     ],
     outputParameters: {
       node_id: "${agent_sync.output.response.body.node_id}",
+      summary: "${summarize.output.result}",
     },
   };
 }
@@ -110,8 +145,13 @@ async function registerWorkflow() {
 }
 
 // Start a continuum_ingest workflow execution. Resolves with the workflow id.
+// Tags the run with a correlationId (the user id) so all of a teammate's
+// ingestions can be filtered together in the Orkes dashboard.
 async function startIngest(descriptor) {
-  const res = await fetch(`${base()}/api/workflow/${WORKFLOW_NAME}`, {
+  const correlation = config.userId
+    ? `?correlationId=${encodeURIComponent(config.userId)}`
+    : "";
+  const res = await fetch(`${base()}/api/workflow/${WORKFLOW_NAME}${correlation}`, {
     method: "POST",
     headers: await authHeaders(),
     body: JSON.stringify(buildIngestInput(descriptor)),
